@@ -37,19 +37,19 @@ That's it. Your rules, skills, agents, commands, hooks, plugins, and settings ar
 ### One-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ricklamers/claude-env/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rmdes/claude-env/main/install.sh | bash
 ```
 
 This downloads `claude-env` to `~/.local/bin/`. Override with `INSTALL_DIR`:
 
 ```bash
-INSTALL_DIR=/usr/local/bin sudo -E bash -c "$(curl -fsSL https://raw.githubusercontent.com/ricklamers/claude-env/main/install.sh)"
+INSTALL_DIR=/usr/local/bin sudo -E bash -c "$(curl -fsSL https://raw.githubusercontent.com/rmdes/claude-env/main/install.sh)"
 ```
 
 ### Manual
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ricklamers/claude-env/main/claude-env -o ~/.local/bin/claude-env
+curl -fsSL https://raw.githubusercontent.com/rmdes/claude-env/main/claude-env -o ~/.local/bin/claude-env
 chmod +x ~/.local/bin/claude-env
 ```
 
