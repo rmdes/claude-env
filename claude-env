@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="0.1.0"
+
+# --- Default variables ---
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+BACKUP_DIR="${BACKUP_DIR:-$HOME/.claude-backups}"
+DRY_RUN=false
+VERBOSE=false
+FORCE=false
+
+# --- Color auto-detection ---
+if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
+    RED='\033[0;31m'
+    BLUE='\033[0;34m'
+    YELLOW='\033[0;33m'
+    RESET='\033[0m'
+else
+    RED=''
+    BLUE=''
+    YELLOW=''
+    RESET=''
+fi
+
+# --- Logging helpers ---
+die() {
+    printf "${RED}error:${RESET} %s\n" "$*" >&2
+    exit 1
+}
+
+info() {
+    printf "${BLUE}info:${RESET} %s\n" "$*"
+}
+
+warn() {
+    printf "${YELLOW}warn:${RESET} %s\n" "$*" >&2
+}
+
+debug() {
+    if [[ "$VERBOSE" == true ]]; then
+        printf "debug: %s\n" "$*" >&2
+    fi
+}
+
+# --- Usage ---
+usage() {
+    cat <<'EOF'
+claude-env — snapshot, restore, and manage Claude Code environments
+
+USAGE
+    claude-env <command> [options]
+
+COMMANDS
+    backup [name]       Create a named snapshot of the current Claude environment
+    restore <name>      Restore a previously saved snapshot
+    list                List all available snapshots
+    diff <name>         Show differences between current environment and a snapshot
+    help                Show this help message
+    version             Show version
+
+GLOBAL FLAGS
+    --dir <path>        Set backup directory (default: ~/.claude-backups)
+    --claude-dir <path> Set Claude config directory (default: ~/.claude)
+    --dry-run           Show what would be done without making changes
+    --verbose           Enable verbose/debug output
+    --help, -h          Show this help message
+    --version, -v       Show version
+
+BACKUP FLAGS
+    --no-reset          Skip resetting the environment after backup
+    --include-mcp       Include MCP server configurations
+    --include-credentials
+                        Include credential files in the backup
+    --keep-config       Preserve configuration files during reset
+    --keep-plugins      Preserve plugins during reset
+    --only <layers>     Only backup specific layers (comma-separated)
+
+RESTORE FLAGS
+    --force             Overwrite current environment without confirmation
+
+EXAMPLES
+    claude-env backup                   # Backup with auto-generated name
+    claude-env backup my-setup          # Backup with custom name
+    claude-env restore my-setup         # Restore a snapshot
+    claude-env list                     # List all snapshots
+    claude-env diff my-setup            # Compare current env with snapshot
+EOF
+}
+
+# --- Stub commands ---
+cmd_backup() {
+    info "Not implemented yet"
+}
+
+cmd_restore() {
+    info "Not implemented yet"
+}
+
+cmd_list() {
+    info "Not implemented yet"
+}
+
+cmd_diff() {
+    info "Not implemented yet"
+}
+
+# --- Global flag parsing ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dir)
+            [[ $# -lt 2 ]] && die "--dir requires a value"
+            BACKUP_DIR="$2"
+            shift 2
+            ;;
+        --claude-dir)
+            [[ $# -lt 2 ]] && die "--claude-dir requires a value"
+            CLAUDE_DIR="$2"
+            shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --verbose)
+            VERBOSE=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --version|-v)
+            echo "claude-env $VERSION"
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# --- Subcommand dispatch ---
+case "${1:-}" in
+    backup)  shift; cmd_backup "$@" ;;
+    restore) shift; cmd_restore "$@" ;;
+    list)    shift; cmd_list "$@" ;;
+    diff)    shift; cmd_diff "$@" ;;
+    help)    usage ;;
+    version) echo "claude-env $VERSION" ;;
+    "")      usage ;;
+    *)       die "Unknown command: $1. Run 'claude-env help' for usage." ;;
+esac
