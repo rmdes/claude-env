@@ -43,6 +43,167 @@ debug() {
     fi
 }
 
+# --- Layer definitions (paths relative to CLAUDE_DIR) ---
+LAYER_CUSTOMIZATIONS=(
+    "rules"
+    "skills"
+    "commands"
+    "agents"
+    "hooks"
+    "CLAUDE.md"
+)
+
+LAYER_CONFIG=(
+    "settings.json"
+    "settings.local.json"
+    "settings.json.bak"
+    "statusline.sh"
+    "statusline-command.sh"
+    ".sisyphus-config.json"
+    ".sisyphus-version.json"
+    ".pilot-manifest.json"
+    ".pilot-claude-baseline.json"
+    ".pilot-settings-baseline.json"
+)
+
+LAYER_PLUGINS=(
+    "plugins/installed_plugins.json"
+    "plugins/config.json"
+    "plugins/known_marketplaces.json"
+    "plugins/local"
+    "plugins/data"
+)
+
+LAYER_INTEGRATIONS=()
+
+LAYER_CREDENTIALS=(
+    ".credentials.json"
+)
+
+LAYER_MCP=(
+    "mcp-servers"
+    ".mcp.json"
+)
+
+# All layer names
+ALL_LAYERS=(customizations config plugins integrations credentials mcp)
+
+# Default behavior
+DEFAULT_BACKUP_LAYERS=(customizations config plugins integrations)
+DEFAULT_KEEP_LAYERS=(credentials mcp)
+
+# --- Layer flag variables ---
+INCLUDE_MCP=false
+INCLUDE_CREDENTIALS=false
+KEEP_CONFIG=false
+KEEP_PLUGINS=false
+NO_RESET=false
+ONLY_LAYERS=""
+
+# --- Layer helper functions ---
+get_layer_paths() {
+    local layer="$1"
+    local -n arr="LAYER_${layer^^}"
+    printf '%s\n' "${arr[@]}"
+}
+
+# Check if an element is in an array
+_array_contains() {
+    local needle="$1"; shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+# Remove an element from an array (prints remaining elements)
+_array_remove() {
+    local needle="$1"; shift
+    local item
+    for item in "$@"; do
+        [[ "$item" != "$needle" ]] && printf '%s\n' "$item"
+    done
+}
+
+resolve_layers() {
+    local -a backup=("${DEFAULT_BACKUP_LAYERS[@]}")
+    local -a keep=("${DEFAULT_KEEP_LAYERS[@]}")
+
+    # --only overrides defaults entirely
+    if [[ -n "$ONLY_LAYERS" ]]; then
+        local -a only_arr=()
+        IFS=',' read -ra only_arr <<< "$ONLY_LAYERS"
+        backup=("${only_arr[@]}")
+        keep=()
+        local layer
+        for layer in "${ALL_LAYERS[@]}"; do
+            if ! _array_contains "$layer" "${backup[@]}"; then
+                keep+=("$layer")
+            fi
+        done
+    fi
+
+    # --include-mcp: move mcp from keep to backup
+    if [[ "$INCLUDE_MCP" == true ]]; then
+        if _array_contains "mcp" "${keep[@]}"; then
+            mapfile -t keep < <(_array_remove "mcp" "${keep[@]}")
+            backup+=("mcp")
+        fi
+    fi
+
+    # --include-credentials: move credentials from keep to backup
+    if [[ "$INCLUDE_CREDENTIALS" == true ]]; then
+        if _array_contains "credentials" "${keep[@]}"; then
+            mapfile -t keep < <(_array_remove "credentials" "${keep[@]}")
+            backup+=("credentials")
+        fi
+    fi
+
+    # --keep-config: move config from backup to keep
+    if [[ "$KEEP_CONFIG" == true ]]; then
+        if _array_contains "config" "${backup[@]}"; then
+            mapfile -t backup < <(_array_remove "config" "${backup[@]}")
+            keep+=("config")
+        fi
+    fi
+
+    # --keep-plugins: move plugins from backup to keep
+    if [[ "$KEEP_PLUGINS" == true ]]; then
+        if _array_contains "plugins" "${backup[@]}"; then
+            mapfile -t backup < <(_array_remove "plugins" "${backup[@]}")
+            keep+=("plugins")
+        fi
+    fi
+
+    RESOLVED_BACKUP=("${backup[@]}")
+    RESOLVED_KEEP=("${keep[@]}")
+}
+
+# --- debug-layers command ---
+cmd_debug_layers() {
+    # Parse layer-related flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --include-mcp)       INCLUDE_MCP=true; shift ;;
+            --include-credentials) INCLUDE_CREDENTIALS=true; shift ;;
+            --keep-config)       KEEP_CONFIG=true; shift ;;
+            --keep-plugins)      KEEP_PLUGINS=true; shift ;;
+            --no-reset)          NO_RESET=true; shift ;;
+            --only)
+                [[ $# -lt 2 ]] && die "--only requires a value"
+                ONLY_LAYERS="$2"; shift 2
+                ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    resolve_layers
+
+    echo "Backup layers: ${RESOLVED_BACKUP[*]}"
+    echo "Keep layers:   ${RESOLVED_KEEP[*]}"
+}
+
 # --- Usage ---
 usage() {
     cat <<'EOF'
@@ -145,8 +306,9 @@ case "${1:-}" in
     backup)  shift; cmd_backup "$@" ;;
     restore) shift; cmd_restore "$@" ;;
     list)    shift; cmd_list "$@" ;;
-    diff)    shift; cmd_diff "$@" ;;
-    help)    usage ;;
+    diff)         shift; cmd_diff "$@" ;;
+    debug-layers) shift; cmd_debug_layers "$@" ;;
+    help)         usage ;;
     version) echo "claude-env $VERSION" ;;
     "")      usage ;;
     *)       die "Unknown command: $1. Run 'claude-env help' for usage." ;;
