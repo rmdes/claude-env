@@ -2,14 +2,13 @@
 set -euo pipefail
 
 # claude-env installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/<owner>/claude-env/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/ricklamers/claude-env/main/install.sh | bash
 
 REPO="claude-env"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BRANCH="${BRANCH:-main}"
 
-# Detect download URL (placeholder — user fills in their GitHub username)
-DOWNLOAD_URL="https://raw.githubusercontent.com/OWNER/${REPO}/${BRANCH}/claude-env"
+DOWNLOAD_URL="https://raw.githubusercontent.com/ricklamers/${REPO}/${BRANCH}/claude-env"
 
 main() {
     echo "Installing claude-env to $INSTALL_DIR..."
