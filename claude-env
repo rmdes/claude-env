@@ -249,9 +249,141 @@ EXAMPLES
 EOF
 }
 
-# --- Stub commands ---
+# --- JSON helper ---
+# Build a JSON array from bash arguments (no jq dependency)
+_json_array() {
+    local first=true
+    printf '['
+    for item in "$@"; do
+        if [[ "$first" == true ]]; then
+            first=false
+        else
+            printf ','
+        fi
+        printf '"%s"' "$item"
+    done
+    printf ']'
+}
+
+# --- backup command ---
 cmd_backup() {
-    info "Not implemented yet"
+    local name=""
+
+    # Parse backup-specific flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-reset)              NO_RESET=true; shift ;;
+            --include-mcp)           INCLUDE_MCP=true; shift ;;
+            --include-credentials)   INCLUDE_CREDENTIALS=true; shift ;;
+            --keep-config)           KEEP_CONFIG=true; shift ;;
+            --keep-plugins)          KEEP_PLUGINS=true; shift ;;
+            --only)
+                [[ $# -lt 2 ]] && die "--only requires a value"
+                ONLY_LAYERS="$2"; shift 2
+                ;;
+            -*)
+                die "Unknown flag: $1"
+                ;;
+            *)
+                # First positional arg = backup name
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    die "Unexpected argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Determine backup name: positional arg or timestamp fallback
+    if [[ -z "$name" ]]; then
+        name="$(date -u +%Y-%m-%dT%H-%M-%S)"
+    fi
+
+    # Validate: CLAUDE_DIR exists
+    [[ -d "$CLAUDE_DIR" ]] || die "Claude directory does not exist: $CLAUDE_DIR"
+
+    # Validate: backup path doesn't already exist
+    local backup_path="$BACKUP_DIR/$name"
+    if [[ -d "$backup_path" ]]; then
+        die "Backup '$name' already exists at $backup_path. Use a different name."
+    fi
+
+    # Resolve which layers to backup/keep
+    resolve_layers
+
+    debug "Backup layers: ${RESOLVED_BACKUP[*]}"
+    debug "Keep layers: ${RESOLVED_KEEP[*]}"
+
+    # --- Copy phase ---
+    local -a copied_layers=()
+    local -a copied_paths=()
+
+    for layer in "${RESOLVED_BACKUP[@]}"; do
+        local layer_copied=false
+        while IFS= read -r path; do
+            # Skip empty paths (from layers with no entries)
+            [[ -z "$path" ]] && continue
+            local src="$CLAUDE_DIR/$path"
+            if [[ -e "$src" ]]; then
+                local dest="$backup_path/$path"
+                if [[ "$DRY_RUN" == true ]]; then
+                    info "[dry-run] Would copy: $path"
+                else
+                    # Create parent directory for the destination
+                    mkdir -p "$(dirname "$dest")"
+                    if [[ -d "$src" ]]; then
+                        cp -a "$src" "$dest"
+                    else
+                        cp -a "$src" "$dest"
+                    fi
+                    debug "Copied: $path"
+                fi
+                copied_paths+=("$path")
+                layer_copied=true
+            else
+                debug "Skipped (not found): $path"
+            fi
+        done < <(get_layer_paths "$layer")
+
+        if [[ "$layer_copied" == true ]]; then
+            copied_layers+=("$layer")
+        fi
+    done
+
+    # --- Write manifest.json ---
+    local created
+    created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local backup_json
+    backup_json="$(_json_array "${copied_layers[@]}")"
+    local kept_json
+    kept_json="$(_json_array "${RESOLVED_KEEP[@]}")"
+
+    local manifest
+    manifest=$(printf '{\n  "version": 1,\n  "created": "%s",\n  "name": "%s",\n  "layers": %s,\n  "kept": %s,\n  "claude_dir": "%s"\n}' \
+        "$created" "$name" "$backup_json" "$kept_json" "$CLAUDE_DIR")
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would write manifest.json:"
+        printf '%s\n' "$manifest"
+    else
+        mkdir -p "$backup_path"
+        printf '%s\n' "$manifest" > "$backup_path/manifest.json"
+    fi
+
+    # --- Summary ---
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Backup '$name' would include layers: ${copied_layers[*]:-none}"
+        info "[dry-run] Kept layers (not backed up): ${RESOLVED_KEEP[*]:-none}"
+    else
+        local size
+        size="$(du -sh "$backup_path" 2>/dev/null | cut -f1)"
+        info "Backup created: $backup_path"
+        info "Layers backed up: ${copied_layers[*]:-none}"
+        info "Layers kept (not backed up): ${RESOLVED_KEEP[*]:-none}"
+        info "Total size: $size"
+    fi
 }
 
 cmd_restore() {
