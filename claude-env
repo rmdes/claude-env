@@ -104,6 +104,7 @@ ONLY_LAYERS=""
 get_layer_paths() {
     local layer="$1"
     local -n arr="LAYER_${layer^^}"
+    [[ ${#arr[@]} -eq 0 ]] && return 0
     printf '%s\n' "${arr[@]}"
 }
 
@@ -273,6 +274,7 @@ cmd_backup() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --no-reset)              NO_RESET=true; shift ;;
+            --force)                 FORCE=true; shift ;;
             --include-mcp)           INCLUDE_MCP=true; shift ;;
             --include-credentials)   INCLUDE_CREDENTIALS=true; shift ;;
             --keep-config)           KEEP_CONFIG=true; shift ;;
@@ -306,8 +308,8 @@ cmd_backup() {
 
     # Validate: backup path doesn't already exist
     local backup_path="$BACKUP_DIR/$name"
-    if [[ -d "$backup_path" ]]; then
-        die "Backup '$name' already exists at $backup_path. Use a different name."
+    if [[ -d "$backup_path" ]] && [[ "$FORCE" != true ]]; then
+        die "Backup '$name' already exists at $backup_path. Use a different name or --force."
     fi
 
     # Resolve which layers to backup/keep
@@ -333,11 +335,7 @@ cmd_backup() {
                 else
                     # Create parent directory for the destination
                     mkdir -p "$(dirname "$dest")"
-                    if [[ -d "$src" ]]; then
-                        cp -a "$src" "$dest"
-                    else
-                        cp -a "$src" "$dest"
-                    fi
+                    cp -a "$src" "$dest"
                     debug "Copied: $path"
                 fi
                 copied_paths+=("$path")
@@ -372,16 +370,53 @@ cmd_backup() {
         printf '%s\n' "$manifest" > "$backup_path/manifest.json"
     fi
 
+    # --- Reset phase ---
+    local -a reset_paths=()
+
+    if [[ "$NO_RESET" == true ]]; then
+        debug "Skipping reset phase (--no-reset)"
+    else
+        for layer in "${RESOLVED_BACKUP[@]}"; do
+            while IFS= read -r path; do
+                [[ -z "$path" ]] && continue
+                local target="$CLAUDE_DIR/$path"
+                if [[ -e "$target" ]]; then
+                    if [[ "$DRY_RUN" == true ]]; then
+                        info "[dry-run] Would remove: $path"
+                    else
+                        rm -rf "$target"
+                        debug "Removed: $path"
+                    fi
+                    reset_paths+=("$path")
+                fi
+            done < <(get_layer_paths "$layer")
+        done
+    fi
+
     # --- Summary ---
     if [[ "$DRY_RUN" == true ]]; then
         info "[dry-run] Backup '$name' would include layers: ${copied_layers[*]:-none}"
         info "[dry-run] Kept layers (not backed up): ${RESOLVED_KEEP[*]:-none}"
+        if [[ "$NO_RESET" == true ]]; then
+            info "[dry-run] Reset: skipped (--no-reset)"
+        elif [[ ${#reset_paths[@]} -gt 0 ]]; then
+            info "[dry-run] Would reset ${#reset_paths[@]} path(s)"
+        else
+            info "[dry-run] Nothing to reset"
+        fi
     else
         local size
         size="$(du -sh "$backup_path" 2>/dev/null | cut -f1)"
         info "Backup created: $backup_path"
         info "Layers backed up: ${copied_layers[*]:-none}"
         info "Layers kept (not backed up): ${RESOLVED_KEEP[*]:-none}"
+        if [[ "$NO_RESET" == true ]]; then
+            info "Reset: skipped (--no-reset)"
+        elif [[ ${#reset_paths[@]} -gt 0 ]]; then
+            info "Reset ${#reset_paths[@]} path(s) from CLAUDE_DIR"
+        else
+            info "Nothing to reset"
+        fi
         info "Total size: $size"
     fi
 }
