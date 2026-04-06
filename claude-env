@@ -523,7 +523,65 @@ cmd_restore() {
 }
 
 cmd_list() {
-    info "Not implemented yet"
+    # Check if backup directory exists
+    if [[ ! -d "$BACKUP_DIR" ]]; then
+        echo "No backups found."
+        return 0
+    fi
+
+    # Collect backups with manifest.json
+    local -a entries=()
+    local dir
+    for dir in "$BACKUP_DIR"/*/; do
+        [[ -d "$dir" ]] || continue
+        local manifest="$dir/manifest.json"
+        [[ -f "$manifest" ]] || continue
+
+        local name
+        name="$(basename "$dir")"
+
+        # Extract created date
+        local created
+        created=$(grep '"created"' "$manifest" | sed 's/.*"created": *"//;s/".*//')
+        local created_display="${created:0:10} ${created:11:5}"
+
+        # Extract layers
+        local layers
+        layers=$(grep '"layers"' "$manifest" | sed 's/.*\[//;s/\].*//;s/"//g;s/ //g')
+
+        # Get total size
+        local size
+        size=$(du -sh "$dir" 2>/dev/null | cut -f1)
+
+        # Store as a sortable entry (created timestamp first for sorting)
+        entries+=("${created}|${name}|${created_display}|${layers}|${size}")
+    done
+
+    # Check if any backups found
+    if [[ ${#entries[@]} -eq 0 ]]; then
+        echo "No backups found."
+        return 0
+    fi
+
+    # Sort by created date (newest first)
+    local -a sorted=()
+    mapfile -t sorted < <(printf '%s\n' "${entries[@]}" | sort -r)
+
+    # Print header
+    printf "%-34s%-22s%-34s%s\n" "Name" "Created" "Layers" "Size"
+    printf '%0.s─' {1..98}
+    printf '\n'
+
+    # Print each entry
+    local entry
+    for entry in "${sorted[@]}"; do
+        local name created_display layers size
+        IFS='|' read -r _ name created_display layers size <<< "$entry"
+        printf "%-34s%-22s%-34s%s\n" "$name" "$created_display" "$layers" "$size"
+    done
+
+    # Total count
+    printf '\n%d backup(s) found.\n' "${#sorted[@]}"
 }
 
 cmd_diff() {
