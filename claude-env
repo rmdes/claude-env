@@ -13,11 +13,13 @@ FORCE=false
 # --- Color auto-detection ---
 if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
     RED='\033[0;31m'
+    GREEN='\033[0;32m'
     BLUE='\033[0;34m'
     YELLOW='\033[0;33m'
     RESET='\033[0m'
 else
     RED=''
+    GREEN=''
     BLUE=''
     YELLOW=''
     RESET=''
@@ -585,7 +587,120 @@ cmd_list() {
 }
 
 cmd_diff() {
-    info "Not implemented yet"
+    local name=""
+
+    # Parse diff-specific flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*)
+                die "Unknown flag: $1" ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    die "Unexpected argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Require backup name
+    [[ -n "$name" ]] || die "Backup name required. Usage: claude-env diff <name>"
+
+    # Validate backup exists
+    local backup_path="$BACKUP_DIR/$name"
+    [[ -d "$backup_path" ]] || die "Backup '$name' not found at $backup_path"
+    [[ -f "$backup_path/manifest.json" ]] || die "Invalid backup: manifest.json not found in $backup_path"
+
+    # Read manifest to get layers list
+    local layers_str
+    layers_str=$(grep '"layers"' "$backup_path/manifest.json" | sed 's/.*\[//;s/\].*//;s/"//g')
+    local -a diff_layers
+    IFS=',' read -ra diff_layers <<< "$layers_str"
+
+    # Counters
+    local count_identical=0
+    local count_modified=0
+    local count_backup_only=0
+    local count_current_only=0
+
+    for layer in "${diff_layers[@]}"; do
+        local layer_header_printed=false
+
+        while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+
+            local backup_src="$backup_path/$path"
+            local current_src="$CLAUDE_DIR/$path"
+            local in_backup=false
+            local in_current=false
+
+            [[ -e "$backup_src" ]] && in_backup=true
+            [[ -e "$current_src" ]] && in_current=true
+
+            # Neither exists — skip silently
+            if [[ "$in_backup" == false ]] && [[ "$in_current" == false ]]; then
+                continue
+            fi
+
+            # Print layer header on first path
+            if [[ "$layer_header_printed" == false ]]; then
+                printf "\nLayer: %s\n" "$layer"
+                layer_header_printed=true
+            fi
+
+            # Determine display name (append / for directories)
+            local display="$path"
+            if [[ -d "$backup_src" ]] || [[ -d "$current_src" ]]; then
+                # Strip trailing slash if present, then add it
+                display="${path%/}/"
+            fi
+
+            if [[ "$in_backup" == true ]] && [[ "$in_current" == true ]]; then
+                # Both exist — compare
+                local diff_output
+                if [[ -d "$backup_src" ]] && [[ -d "$current_src" ]]; then
+                    # Directory comparison
+                    diff_output=$(diff -rq "$backup_src" "$current_src" 2>/dev/null || true)
+                    if [[ -z "$diff_output" ]]; then
+                        printf "  ${GREEN}✓${RESET} %-20s — identical\n" "$display"
+                        (( count_identical++ )) || true
+                    else
+                        local diff_count
+                        diff_count=$(printf '%s\n' "$diff_output" | wc -l)
+                        printf "  ${YELLOW}~${RESET} %-20s — %d file(s) differ\n" "$display" "$diff_count"
+                        (( count_modified++ )) || true
+                    fi
+                elif [[ -f "$backup_src" ]] && [[ -f "$current_src" ]]; then
+                    # File comparison
+                    if diff -q "$backup_src" "$current_src" >/dev/null 2>&1; then
+                        printf "  ${GREEN}✓${RESET} %-20s — identical\n" "$display"
+                        (( count_identical++ )) || true
+                    else
+                        printf "  ${YELLOW}~${RESET} %-20s — modified\n" "$display"
+                        (( count_modified++ )) || true
+                    fi
+                else
+                    # Type mismatch (one is file, other is directory)
+                    printf "  ${YELLOW}~${RESET} %-20s — modified (type changed)\n" "$display"
+                    (( count_modified++ )) || true
+                fi
+            elif [[ "$in_backup" == true ]] && [[ "$in_current" == false ]]; then
+                # Only in backup
+                printf "  ${RED}+${RESET} %-20s — only in backup (missing from current)\n" "$display"
+                (( count_backup_only++ )) || true
+            elif [[ "$in_backup" == false ]] && [[ "$in_current" == true ]]; then
+                # Only in current
+                printf "  ${RED}-${RESET} %-20s — only in current (not in backup)\n" "$display"
+                (( count_current_only++ )) || true
+            fi
+        done < <(get_layer_paths "$layer")
+    done
+
+    # Summary
+    printf "\nSummary: %d identical, %d modified, %d only in backup, %d only in current\n" \
+        "$count_identical" "$count_modified" "$count_backup_only" "$count_current_only"
 }
 
 # --- Global flag parsing ---
