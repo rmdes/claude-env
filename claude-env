@@ -422,7 +422,104 @@ cmd_backup() {
 }
 
 cmd_restore() {
-    info "Not implemented yet"
+    local name=""
+
+    # Parse restore-specific flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force)
+                FORCE=true; shift ;;
+            -*)
+                die "Unknown flag: $1" ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    die "Unexpected argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Require backup name
+    [[ -n "$name" ]] || die "Backup name required. Usage: claude-env restore <name>"
+
+    # Validate backup exists
+    local backup_path="$BACKUP_DIR/$name"
+    [[ -d "$backup_path" ]] || die "Backup '$name' not found at $backup_path"
+    [[ -f "$backup_path/manifest.json" ]] || die "Invalid backup: manifest.json not found in $backup_path"
+
+    # Read manifest to get layers list
+    local layers_str
+    layers_str=$(grep '"layers"' "$backup_path/manifest.json" | sed 's/.*\[//;s/\].*//;s/"//g')
+    local -a restore_layers
+    IFS=',' read -ra restore_layers <<< "$layers_str"
+
+    debug "Restore layers from manifest: ${restore_layers[*]}"
+
+    # --- Dry-run mode ---
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would restore backup '$name' from $backup_path"
+        info "[dry-run] Layers: ${restore_layers[*]}"
+        for layer in "${restore_layers[@]}"; do
+            while IFS= read -r path; do
+                [[ -z "$path" ]] && continue
+                if [[ -e "$backup_path/$path" ]]; then
+                    info "[dry-run] Would restore: $path"
+                fi
+            done < <(get_layer_paths "$layer")
+        done
+        return 0
+    fi
+
+    # --- Auto-backup current state (unless --force) ---
+    if [[ "$FORCE" != true ]]; then
+        local auto_name="pre-restore-$(date -u +%Y-%m-%dT%H-%M-%S)"
+        info "Auto-backing up current state as '$auto_name'..."
+
+        # Reset layer flags so the auto-backup uses defaults
+        INCLUDE_MCP=false
+        INCLUDE_CREDENTIALS=false
+        KEEP_CONFIG=false
+        KEEP_PLUGINS=false
+        NO_RESET=true  # Don't reset during auto-backup
+        ONLY_LAYERS=""
+        FORCE=false
+
+        cmd_backup "$auto_name" --no-reset
+    fi
+
+    # --- Restore phase ---
+    local -a restored_paths=()
+    local -a restored_layers=()
+
+    for layer in "${restore_layers[@]}"; do
+        local layer_restored=false
+        while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            local src="$backup_path/$path"
+            if [[ -e "$src" ]]; then
+                local dest="$CLAUDE_DIR/$path"
+                mkdir -p "$(dirname "$dest")"
+                cp -a "$src" "$dest"
+                debug "Restored: $path"
+                restored_paths+=("$path")
+                layer_restored=true
+            else
+                debug "Skipped (not in backup): $path"
+            fi
+        done < <(get_layer_paths "$layer")
+
+        if [[ "$layer_restored" == true ]]; then
+            restored_layers+=("$layer")
+        fi
+    done
+
+    # --- Summary ---
+    info "Restored backup '$name' from $backup_path"
+    info "Layers restored: ${restored_layers[*]:-none}"
+    info "Paths restored: ${#restored_paths[@]}"
 }
 
 cmd_list() {
