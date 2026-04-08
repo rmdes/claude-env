@@ -205,22 +205,26 @@ load test_helper
     [ -f "$CLAUDE_DIR/.mcp.json" ]
 }
 
-@test "clean: preserves runtime state (cache, telemetry, etc.)" {
+@test "clean: removes junk (debug, file-history, shell-snapshots, telemetry, cache)" {
     run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force
     [ "$status" -eq 0 ]
-    [ -d "$CLAUDE_DIR/cache" ]
-    [ -d "$CLAUDE_DIR/telemetry" ]
-    [ -d "$CLAUDE_DIR/statsig" ]
-    [ -d "$CLAUDE_DIR/debug" ]
-    [ -d "$CLAUDE_DIR/ide" ]
+    [ ! -d "$CLAUDE_DIR/cache" ]
+    [ ! -d "$CLAUDE_DIR/debug" ]
+    [ ! -d "$CLAUDE_DIR/file-history" ]
+    [ ! -d "$CLAUDE_DIR/shell-snapshots" ]
+    [ ! -d "$CLAUDE_DIR/telemetry" ]
+    [ ! -d "$CLAUDE_DIR/statsig" ]
+    [ ! -d "$CLAUDE_DIR/ide" ]
+    [ ! -d "$CLAUDE_DIR/paste-cache" ]
+    [ ! -d "$CLAUDE_DIR/session-env" ]
 }
 
 @test "clean: --also removes a normally-preserved item" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force --also cache
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force --also projects
     [ "$status" -eq 0 ]
-    [ ! -d "$CLAUDE_DIR/cache" ]
+    [ ! -d "$CLAUDE_DIR/projects" ]
     # But other preserved items still intact
-    [ -d "$CLAUDE_DIR/projects" ]
+    [ -f "$CLAUDE_DIR/history.jsonl" ]
     [ -f "$CLAUDE_DIR/.credentials.json" ]
 }
 
