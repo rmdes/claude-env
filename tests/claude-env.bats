@@ -171,6 +171,79 @@ load test_helper
 }
 
 # =============================================================================
+# CLEAN
+# =============================================================================
+
+@test "clean: removes skills, agents, plugins, rules, config" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force
+    [ "$status" -eq 0 ]
+    [ ! -d "$CLAUDE_DIR/skills" ]
+    [ ! -d "$CLAUDE_DIR/agents" ]
+    [ ! -d "$CLAUDE_DIR/plugins" ]
+    [ ! -d "$CLAUDE_DIR/rules" ]
+    [ ! -d "$CLAUDE_DIR/commands" ]
+    [ ! -d "$CLAUDE_DIR/hooks" ]
+    [ ! -f "$CLAUDE_DIR/CLAUDE.md" ]
+    [ ! -f "$CLAUDE_DIR/AGENTS.md" ]
+    [ ! -f "$CLAUDE_DIR/settings.json" ]
+}
+
+@test "clean: preserves session history and projects" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force
+    [ "$status" -eq 0 ]
+    [ -d "$CLAUDE_DIR/projects" ]
+    [ -f "$CLAUDE_DIR/projects/test-project/session.json" ]
+    [ -d "$CLAUDE_DIR/sessions" ]
+    [ -f "$CLAUDE_DIR/history.jsonl" ]
+}
+
+@test "clean: preserves credentials and mcp" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force
+    [ "$status" -eq 0 ]
+    [ -f "$CLAUDE_DIR/.credentials.json" ]
+    [ -d "$CLAUDE_DIR/mcp-servers" ]
+    [ -f "$CLAUDE_DIR/.mcp.json" ]
+}
+
+@test "clean: preserves runtime state (cache, telemetry, etc.)" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force
+    [ "$status" -eq 0 ]
+    [ -d "$CLAUDE_DIR/cache" ]
+    [ -d "$CLAUDE_DIR/telemetry" ]
+    [ -d "$CLAUDE_DIR/statsig" ]
+    [ -d "$CLAUDE_DIR/debug" ]
+    [ -d "$CLAUDE_DIR/ide" ]
+}
+
+@test "clean: --also removes a normally-preserved item" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force --also cache
+    [ "$status" -eq 0 ]
+    [ ! -d "$CLAUDE_DIR/cache" ]
+    # But other preserved items still intact
+    [ -d "$CLAUDE_DIR/projects" ]
+    [ -f "$CLAUDE_DIR/.credentials.json" ]
+}
+
+@test "clean: --dry-run removes nothing" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" --dry-run clean --force
+    [ "$status" -eq 0 ]
+    # Everything should still be there
+    [ -d "$CLAUDE_DIR/skills" ]
+    [ -d "$CLAUDE_DIR/plugins" ]
+    [ -d "$CLAUDE_DIR/projects" ]
+    [[ "$output" == *"dry-run"* ]]
+}
+
+@test "clean: also removes unknown files not in preserve list" {
+    echo '{"custom": true}' > "$CLAUDE_DIR/custom-thing.json"
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" clean --force
+    [ "$status" -eq 0 ]
+    [ ! -f "$CLAUDE_DIR/custom-thing.json" ]
+    # But preserved items intact
+    [ -d "$CLAUDE_DIR/projects" ]
+}
+
+# =============================================================================
 # RESTORE
 # =============================================================================
 

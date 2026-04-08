@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 # --- Default variables ---
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
@@ -64,6 +64,31 @@ EXCLUDE_CREDENTIALS=(
 EXCLUDE_MCP=(
     "mcp-servers"
     ".mcp.json"
+)
+
+# Items preserved during 'clean' (session history, runtime state, credentials, mcp)
+PRESERVE_ON_CLEAN=(
+    ".credentials.json"
+    "mcp-servers"
+    ".mcp.json"
+    "projects"
+    "sessions"
+    "history.jsonl"
+    "cache"
+    "debug"
+    "file-history"
+    "shell-snapshots"
+    "session-env"
+    "paste-cache"
+    "backups"
+    "telemetry"
+    "statsig"
+    "ide"
+    "plans"
+    "tasks"
+    "todos"
+    "stats-cache.json"
+    "mcp-needs-auth-cache.json"
 )
 
 # --- Exclude flag variables ---
@@ -142,6 +167,7 @@ USAGE
 COMMANDS
     backup [name]       Create a named snapshot of the current Claude environment
     restore <name>      Restore a previously saved snapshot
+    clean               Remove plugins, skills, agents, config — keep session history
     list                List all available snapshots
     diff <name>         Show differences between current environment and a snapshot
     help                Show this help message
@@ -166,12 +192,18 @@ BACKUP FLAGS
 RESTORE FLAGS
     --force             Skip auto-backup of current state before restoring
 
+CLEAN FLAGS
+    --force             Skip confirmation prompt
+    --also <path>       Also remove an item that would normally be preserved (repeatable)
+
 EXAMPLES
     claude-env backup                      # Backup everything (auto-named)
     claude-env backup my-setup             # Backup with custom name
     claude-env backup --no-reset snapshot  # Backup without resetting
     claude-env backup --include-mcp full   # Include MCP configs too
     claude-env restore my-setup            # Restore a snapshot
+    claude-env clean                       # Wipe tooling, keep history
+    claude-env clean --force               # No confirmation
     claude-env list                        # List all snapshots
     claude-env diff my-setup               # Compare current env with snapshot
 EOF
@@ -409,6 +441,92 @@ cmd_restore() {
     info "Restored ${#restored_paths[@]} item(s)"
 }
 
+# --- clean command ---
+cmd_clean() {
+    local -a also_remove=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force)  FORCE=true; shift ;;
+            --also)
+                [[ $# -lt 2 ]] && die "--also requires a value"
+                also_remove+=("$2"); shift 2
+                ;;
+            -*)       die "Unknown flag: $1" ;;
+            *)        die "Unexpected argument: $1" ;;
+        esac
+    done
+
+    [[ -d "$CLAUDE_DIR" ]] || die "Claude directory does not exist: $CLAUDE_DIR"
+
+    # Build the preserve list, minus any --also items
+    local -a preserve=()
+    local p
+    for p in "${PRESERVE_ON_CLEAN[@]}"; do
+        if ! _array_contains "$p" "${also_remove[@]+"${also_remove[@]}"}"; then
+            preserve+=("$p")
+        fi
+    done
+
+    # Determine what will be removed
+    local -a to_remove=()
+    while IFS= read -r item; do
+        [[ -z "$item" ]] && continue
+        if ! _array_contains "$item" "${preserve[@]}"; then
+            to_remove+=("$item")
+        fi
+    done < <(_list_claude_items)
+
+    if [[ ${#to_remove[@]} -eq 0 ]]; then
+        info "Nothing to clean."
+        return 0
+    fi
+
+    # Show what will happen
+    info "Will REMOVE (plugins, skills, agents, config, etc.):"
+    for item in "${to_remove[@]}"; do
+        local size
+        size=$(du -sh "$CLAUDE_DIR/$item" 2>/dev/null | cut -f1)
+        printf "  ${RED}✗${RESET} %-40s %s\n" "$item" "$size"
+    done
+
+    echo ""
+    info "Will PRESERVE (session history, runtime, credentials, mcp):"
+    for item in "${preserve[@]}"; do
+        if [[ -e "$CLAUDE_DIR/$item" ]]; then
+            printf "  ${GREEN}✓${RESET} %s\n" "$item"
+        fi
+    done
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo ""
+        info "[dry-run] No changes made."
+        return 0
+    fi
+
+    # Confirm unless --force
+    if [[ "$FORCE" != true ]]; then
+        echo ""
+        printf "Proceed? [y/N] "
+        local reply
+        read -r reply
+        case "$reply" in
+            [yY]|[yY][eE][sS]) ;;
+            *) die "Aborted." ;;
+        esac
+    fi
+
+    # Remove
+    local count=0
+    for item in "${to_remove[@]}"; do
+        rm -rf "$CLAUDE_DIR/$item"
+        debug "Removed: $item"
+        (( count++ )) || true
+    done
+
+    info "Cleaned ${count} item(s). Session history and credentials preserved."
+}
+
 # --- list command ---
 cmd_list() {
     if [[ ! -d "$BACKUP_DIR" ]]; then
@@ -621,6 +739,7 @@ done
 case "${1:-}" in
     backup)  shift; cmd_backup "$@" ;;
     restore) shift; cmd_restore "$@" ;;
+    clean)   shift; cmd_clean "$@" ;;
     list)    shift; cmd_list "$@" ;;
     diff)    shift; cmd_diff "$@" ;;
     help)    usage ;;
