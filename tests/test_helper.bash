@@ -27,6 +27,7 @@ setup() {
     echo "#!/bin/bash" > "$CLAUDE_DIR/hooks/pre-commit.sh"
 
     echo "# Project CLAUDE.md" > "$CLAUDE_DIR/CLAUDE.md"
+    echo "# Agents routing" > "$CLAUDE_DIR/AGENTS.md"
 
     # -- Config layer --
     echo '{"theme": "dark"}' > "$CLAUDE_DIR/settings.json"
@@ -39,6 +40,15 @@ setup() {
     echo '{"plugins": []}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
     echo '{"key": "val"}' > "$CLAUDE_DIR/plugins/config.json"
     echo '[]' > "$CLAUDE_DIR/plugins/known_marketplaces.json"
+
+    # -- Runtime layer --
+    mkdir -p "$CLAUDE_DIR/projects/test-project"
+    echo '{"session": true}' > "$CLAUDE_DIR/projects/test-project/session.json"
+    mkdir -p "$CLAUDE_DIR/sessions"
+    echo '{"active": true}' > "$CLAUDE_DIR/sessions/current.json"
+    echo '{"history": []}' > "$CLAUDE_DIR/history.jsonl"
+    echo '{"warned": true}' > "$CLAUDE_DIR/security_warnings_state_abc123.json"
+    echo '{"warned": false}' > "$CLAUDE_DIR/security_warnings_state_def456.json"
 
     # -- Credentials layer --
     echo '{"token": "secret123"}' > "$CLAUDE_DIR/.credentials.json"

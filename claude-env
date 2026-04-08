@@ -53,6 +53,7 @@ LAYER_CUSTOMIZATIONS=(
     "agents"
     "hooks"
     "CLAUDE.md"
+    "AGENTS.md"
 )
 
 LAYER_CONFIG=(
@@ -91,6 +92,7 @@ LAYER_RUNTIME=(
     "history.jsonl"
     "stats-cache.json"
     "mcp-needs-auth-cache.json"
+    "security_warnings_state_*.json"
 )
 
 LAYER_CREDENTIALS=(
@@ -123,7 +125,18 @@ get_layer_paths() {
     local layer="$1"
     local -n arr="LAYER_${layer^^}"
     [[ ${#arr[@]} -eq 0 ]] && return 0
-    printf '%s\n' "${arr[@]}"
+    local entry
+    for entry in "${arr[@]}"; do
+        if [[ "$entry" == *'*'* ]]; then
+            # Glob pattern: expand against CLAUDE_DIR, output relative paths
+            local expanded
+            for expanded in "$CLAUDE_DIR"/$entry; do
+                [[ -e "$expanded" ]] && basename "$expanded"
+            done
+        else
+            printf '%s\n' "$entry"
+        fi
+    done
 }
 
 # Check if an element is in an array

@@ -259,6 +259,54 @@ load test_helper
 }
 
 # =============================================================================
+# COVERAGE — ensuring all ~/.claude/ items are handled
+# =============================================================================
+
+@test "backup: AGENTS.md is backed up with customizations" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset agents-md-test
+    [ "$status" -eq 0 ]
+    [ -f "$BACKUP_DIR/agents-md-test/AGENTS.md" ]
+}
+
+@test "backup: AGENTS.md is removed on reset" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup agents-md-reset
+    [ "$status" -eq 0 ]
+    [ ! -f "$CLAUDE_DIR/AGENTS.md" ]
+}
+
+@test "backup: session history (projects/) kept by default" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup sessions-default
+    [ "$status" -eq 0 ]
+    # projects/ is in runtime layer, kept by default
+    [ -d "$CLAUDE_DIR/projects" ]
+    [ -f "$CLAUDE_DIR/projects/test-project/session.json" ]
+    # Should NOT be in the backup
+    [ ! -d "$BACKUP_DIR/sessions-default/projects" ]
+}
+
+@test "backup: --include-runtime backs up session history" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-runtime rt-test
+    [ "$status" -eq 0 ]
+    [ -d "$BACKUP_DIR/rt-test/projects" ]
+    [ -f "$BACKUP_DIR/rt-test/projects/test-project/session.json" ]
+    [ -f "$BACKUP_DIR/rt-test/history.jsonl" ]
+}
+
+@test "backup: --include-runtime backs up security warning files" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-runtime secwarn-test
+    [ "$status" -eq 0 ]
+    [ -f "$BACKUP_DIR/secwarn-test/security_warnings_state_abc123.json" ]
+    [ -f "$BACKUP_DIR/secwarn-test/security_warnings_state_def456.json" ]
+}
+
+@test "backup: --include-runtime resets security warning files" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-runtime secwarn-reset
+    [ "$status" -eq 0 ]
+    [ ! -f "$CLAUDE_DIR/security_warnings_state_abc123.json" ]
+    [ ! -f "$CLAUDE_DIR/security_warnings_state_def456.json" ]
+}
+
+# =============================================================================
 # DIFF
 # =============================================================================
 
