@@ -69,14 +69,29 @@ LAYER_CONFIG=(
 )
 
 LAYER_PLUGINS=(
-    "plugins/installed_plugins.json"
-    "plugins/config.json"
-    "plugins/known_marketplaces.json"
-    "plugins/local"
-    "plugins/data"
+    "plugins"
 )
 
-LAYER_INTEGRATIONS=()
+LAYER_RUNTIME=(
+    "cache"
+    "projects"
+    "sessions"
+    "todos"
+    "tasks"
+    "debug"
+    "file-history"
+    "shell-snapshots"
+    "session-env"
+    "paste-cache"
+    "backups"
+    "telemetry"
+    "statsig"
+    "ide"
+    "plans"
+    "history.jsonl"
+    "stats-cache.json"
+    "mcp-needs-auth-cache.json"
+)
 
 LAYER_CREDENTIALS=(
     ".credentials.json"
@@ -88,15 +103,16 @@ LAYER_MCP=(
 )
 
 # All layer names
-ALL_LAYERS=(customizations config plugins integrations credentials mcp)
+ALL_LAYERS=(customizations config plugins runtime credentials mcp)
 
 # Default behavior
-DEFAULT_BACKUP_LAYERS=(customizations config plugins integrations)
-DEFAULT_KEEP_LAYERS=(credentials mcp)
+DEFAULT_BACKUP_LAYERS=(customizations config plugins)
+DEFAULT_KEEP_LAYERS=(credentials mcp runtime)
 
 # --- Layer flag variables ---
 INCLUDE_MCP=false
 INCLUDE_CREDENTIALS=false
+INCLUDE_RUNTIME=false
 KEEP_CONFIG=false
 KEEP_PLUGINS=false
 NO_RESET=false
@@ -163,6 +179,14 @@ resolve_layers() {
         fi
     fi
 
+    # --include-runtime: move runtime from keep to backup (true reset)
+    if [[ "$INCLUDE_RUNTIME" == true ]]; then
+        if _array_contains "runtime" "${keep[@]}"; then
+            mapfile -t keep < <(_array_remove "runtime" "${keep[@]}")
+            backup+=("runtime")
+        fi
+    fi
+
     # --keep-config: move config from backup to keep
     if [[ "$KEEP_CONFIG" == true ]]; then
         if _array_contains "config" "${backup[@]}"; then
@@ -190,6 +214,7 @@ cmd_debug_layers() {
         case "$1" in
             --include-mcp)       INCLUDE_MCP=true; shift ;;
             --include-credentials) INCLUDE_CREDENTIALS=true; shift ;;
+            --include-runtime)   INCLUDE_RUNTIME=true; shift ;;
             --keep-config)       KEEP_CONFIG=true; shift ;;
             --keep-plugins)      KEEP_PLUGINS=true; shift ;;
             --no-reset)          NO_RESET=true; shift ;;
@@ -236,6 +261,7 @@ BACKUP FLAGS
     --include-mcp       Include MCP server configurations
     --include-credentials
                         Include credential files in the backup
+    --include-runtime   Include runtime state (caches, sessions, history) for a true full reset
     --keep-config       Preserve configuration files during reset
     --keep-plugins      Preserve plugins during reset
     --only <layers>     Only backup specific layers (comma-separated)
@@ -279,6 +305,7 @@ cmd_backup() {
             --force)                 FORCE=true; shift ;;
             --include-mcp)           INCLUDE_MCP=true; shift ;;
             --include-credentials)   INCLUDE_CREDENTIALS=true; shift ;;
+            --include-runtime)       INCLUDE_RUNTIME=true; shift ;;
             --keep-config)           KEEP_CONFIG=true; shift ;;
             --keep-plugins)          KEEP_PLUGINS=true; shift ;;
             --only)
@@ -483,6 +510,7 @@ cmd_restore() {
         # Reset layer flags so the auto-backup uses defaults
         INCLUDE_MCP=false
         INCLUDE_CREDENTIALS=false
+        INCLUDE_RUNTIME=false
         KEEP_CONFIG=false
         KEEP_PLUGINS=false
         NO_RESET=true  # Don't reset during auto-backup
