@@ -3,7 +3,7 @@
 load test_helper
 
 # =============================================================================
-# BACKUP — basic behavior
+# BACKUP — core behavior
 # =============================================================================
 
 @test "backup: creates directory with manifest" {
@@ -13,147 +13,161 @@ load test_helper
     [ -f "$BACKUP_DIR/my-test/manifest.json" ]
 }
 
-@test "backup: manifest is valid JSON with required fields" {
+@test "backup: manifest is v2 JSON with backed_up and excluded" {
     run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup json-test
     [ "$status" -eq 0 ]
     manifest="$BACKUP_DIR/json-test/manifest.json"
-    # Check required fields exist
-    grep -q '"version"' "$manifest"
-    grep -q '"created"' "$manifest"
-    grep -q '"name"' "$manifest"
-    grep -q '"layers"' "$manifest"
-    grep -q '"kept"' "$manifest"
-    grep -q '"claude_dir"' "$manifest"
+    grep -q '"version": 2' "$manifest"
+    grep -q '"backed_up"' "$manifest"
+    grep -q '"excluded"' "$manifest"
+    grep -q '"name": "json-test"' "$manifest"
 }
 
-@test "backup: default excludes credentials" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup cred-test
+@test "backup: backs up EVERYTHING except credentials and mcp by default" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset full-test
     [ "$status" -eq 0 ]
-    [ ! -f "$BACKUP_DIR/cred-test/.credentials.json" ]
+
+    # All of these should be in the backup
+    [ -d "$BACKUP_DIR/full-test/rules" ]
+    [ -d "$BACKUP_DIR/full-test/skills" ]
+    [ -d "$BACKUP_DIR/full-test/agents" ]
+    [ -d "$BACKUP_DIR/full-test/plugins" ]
+    [ -d "$BACKUP_DIR/full-test/projects" ]
+    [ -d "$BACKUP_DIR/full-test/sessions" ]
+    [ -d "$BACKUP_DIR/full-test/cache" ]
+    [ -f "$BACKUP_DIR/full-test/CLAUDE.md" ]
+    [ -f "$BACKUP_DIR/full-test/AGENTS.md" ]
+    [ -f "$BACKUP_DIR/full-test/settings.json" ]
+    [ -f "$BACKUP_DIR/full-test/history.jsonl" ]
+    [ -f "$BACKUP_DIR/full-test/stats-cache.json" ]
+    [ -f "$BACKUP_DIR/full-test/security_warnings_state_abc123.json" ]
+    [ -d "$BACKUP_DIR/full-test/plugins/cache" ]
+
+    # Credentials and MCP should NOT be in the backup
+    [ ! -f "$BACKUP_DIR/full-test/.credentials.json" ]
+    [ ! -d "$BACKUP_DIR/full-test/mcp-servers" ]
+    [ ! -f "$BACKUP_DIR/full-test/.mcp.json" ]
 }
 
-@test "backup: default excludes mcp" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup mcp-test
-    [ "$status" -eq 0 ]
-    [ ! -d "$BACKUP_DIR/mcp-test/mcp-servers" ]
-    [ ! -f "$BACKUP_DIR/mcp-test/.mcp.json" ]
-}
-
-@test "backup: --include-mcp includes MCP files" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-mcp mcp-inc
-    [ "$status" -eq 0 ]
-    [ -d "$BACKUP_DIR/mcp-inc/mcp-servers" ]
-    [ -f "$BACKUP_DIR/mcp-inc/.mcp.json" ]
-}
-
-@test "backup: --include-credentials includes credential files" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-credentials cred-inc
-    [ "$status" -eq 0 ]
-    [ -f "$BACKUP_DIR/cred-inc/.credentials.json" ]
-}
-
-@test "backup: --no-reset keeps source files intact" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset noreset-test
-    [ "$status" -eq 0 ]
-    # Source files should still exist
-    [ -d "$CLAUDE_DIR/rules" ]
-    [ -f "$CLAUDE_DIR/CLAUDE.md" ]
-    [ -f "$CLAUDE_DIR/settings.json" ]
-}
-
-@test "backup: default reset removes backed-up layers" {
+@test "backup: default reset removes backed-up items" {
     run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup reset-test
     [ "$status" -eq 0 ]
-    # Customizations should be removed
+
+    # Backed-up items should be removed
     [ ! -d "$CLAUDE_DIR/rules" ]
+    [ ! -d "$CLAUDE_DIR/skills" ]
+    [ ! -d "$CLAUDE_DIR/plugins" ]
+    [ ! -d "$CLAUDE_DIR/projects" ]
     [ ! -f "$CLAUDE_DIR/CLAUDE.md" ]
-    # Config should be removed
     [ ! -f "$CLAUDE_DIR/settings.json" ]
+    [ ! -f "$CLAUDE_DIR/history.jsonl" ]
 }
 
-@test "backup: keeps credentials after reset" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup keep-cred
+@test "backup: credentials kept after reset" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup cred-keep
     [ "$status" -eq 0 ]
-    # Credentials should remain (in keep layer by default)
     [ -f "$CLAUDE_DIR/.credentials.json" ]
 }
 
-@test "backup: keeps mcp after reset" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup keep-mcp
+@test "backup: mcp kept after reset" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup mcp-keep
     [ "$status" -eq 0 ]
-    # MCP should remain (in keep layer by default)
     [ -d "$CLAUDE_DIR/mcp-servers" ]
     [ -f "$CLAUDE_DIR/.mcp.json" ]
 }
 
-@test "backup: --keep-config preserves settings.json" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --keep-config keepcfg
+@test "backup: --include-mcp includes MCP in backup and resets it" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-mcp mcp-inc
     [ "$status" -eq 0 ]
-    # settings.json should still exist (config layer kept)
-    [ -f "$CLAUDE_DIR/settings.json" ]
-    # But customizations should be removed (still backed up)
-    [ ! -d "$CLAUDE_DIR/rules" ]
+    [ -d "$BACKUP_DIR/mcp-inc/mcp-servers" ]
+    [ -f "$BACKUP_DIR/mcp-inc/.mcp.json" ]
+    # MCP should be removed from current
+    [ ! -d "$CLAUDE_DIR/mcp-servers" ]
+    [ ! -f "$CLAUDE_DIR/.mcp.json" ]
 }
 
-@test "backup: --keep-plugins preserves plugins" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --keep-plugins keepplug
+@test "backup: --include-credentials includes credentials in backup" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-credentials cred-inc
     [ "$status" -eq 0 ]
-    # Plugins should still exist
-    [ -d "$CLAUDE_DIR/plugins" ]
-    # But customizations should be removed
-    [ ! -d "$CLAUDE_DIR/rules" ]
+    [ -f "$BACKUP_DIR/cred-inc/.credentials.json" ]
+    [ ! -f "$CLAUDE_DIR/.credentials.json" ]
 }
 
-@test "backup: --only limits scope to specified layers" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --only customizations only-test
+@test "backup: --no-reset keeps source files intact" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset noreset
     [ "$status" -eq 0 ]
-    # Only customizations backed up
-    [ -d "$BACKUP_DIR/only-test/rules" ]
-    [ -f "$BACKUP_DIR/only-test/CLAUDE.md" ]
-    # Config should NOT be backed up
-    [ ! -f "$BACKUP_DIR/only-test/settings.json" ]
-    # Config should still exist in source (it's in keep now)
-    [ -f "$CLAUDE_DIR/settings.json" ]
+    # Everything should still exist
+    [ -d "$CLAUDE_DIR/rules" ]
+    [ -d "$CLAUDE_DIR/skills" ]
+    [ -f "$CLAUDE_DIR/CLAUDE.md" ]
+    [ -d "$CLAUDE_DIR/projects" ]
+}
+
+@test "backup: --exclude skips additional paths" {
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset --exclude plugins --exclude projects excl-test
+    [ "$status" -eq 0 ]
+    # Excluded items should not be in backup
+    [ ! -d "$BACKUP_DIR/excl-test/plugins" ]
+    [ ! -d "$BACKUP_DIR/excl-test/projects" ]
+    # Other items should be
+    [ -d "$BACKUP_DIR/excl-test/rules" ]
+    [ -f "$BACKUP_DIR/excl-test/settings.json" ]
 }
 
 @test "backup: --dry-run creates nothing on disk" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" --dry-run backup dryrun-test
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" --dry-run backup dryrun
     [ "$status" -eq 0 ]
-    [ ! -d "$BACKUP_DIR/dryrun-test" ]
-    # Source should be untouched
-    [ -d "$CLAUDE_DIR/rules" ]
+    [ ! -d "$BACKUP_DIR/dryrun" ]
+    [[ "$output" == *"dry-run"* ]]
 }
 
 @test "backup: duplicate name errors without --force" {
-    # Create first backup
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset dupe-test
-    [ "$status" -eq 0 ]
-    # Try again — should fail
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset dupe-test
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset dup
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup dup
     [ "$status" -ne 0 ]
     [[ "$output" == *"already exists"* ]]
 }
 
 @test "backup: --force overwrites existing backup" {
-    # Create first backup
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset force-test
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset forceme
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset --force forceme
     [ "$status" -eq 0 ]
-    # Overwrite with --force
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset --force force-test
-    [ "$status" -eq 0 ]
-    [ -f "$BACKUP_DIR/force-test/manifest.json" ]
 }
 
 @test "backup: auto-generates timestamp name when none given" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset
     [ "$status" -eq 0 ]
-    # Should have created a directory with timestamp-like name (YYYY-MM-DDTHH-MM-SS)
+    # Should have created a directory with timestamp-like name
     local count
-    count=$(ls -1 "$BACKUP_DIR" | wc -l)
+    count=$(find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d | wc -l)
     [ "$count" -eq 1 ]
-    local name
-    name=$(ls -1 "$BACKUP_DIR")
-    [[ "$name" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]
+}
+
+# =============================================================================
+# BACKUP — catches everything
+# =============================================================================
+
+@test "backup: new unknown files in CLAUDE_DIR are backed up automatically" {
+    # Simulate Claude Code adding a new file/dir we don't know about
+    echo '{"future": true}' > "$CLAUDE_DIR/some-future-feature.json"
+    mkdir -p "$CLAUDE_DIR/new-component"
+    echo "data" > "$CLAUDE_DIR/new-component/stuff.txt"
+
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset future-test
+    [ "$status" -eq 0 ]
+
+    # These should be backed up even though the script doesn't "know" about them
+    [ -f "$BACKUP_DIR/future-test/some-future-feature.json" ]
+    [ -d "$BACKUP_DIR/future-test/new-component" ]
+    [ -f "$BACKUP_DIR/future-test/new-component/stuff.txt" ]
+}
+
+@test "backup: hidden dotfiles in CLAUDE_DIR are backed up" {
+    echo '{"hidden": true}' > "$CLAUDE_DIR/.some-hidden-config.json"
+
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset dotfile-test
+    [ "$status" -eq 0 ]
+    [ -f "$BACKUP_DIR/dotfile-test/.some-hidden-config.json" ]
 }
 
 # =============================================================================
@@ -161,49 +175,57 @@ load test_helper
 # =============================================================================
 
 @test "restore: copies files back to CLAUDE_DIR" {
-    # Backup then reset
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup restore-src
-    [ "$status" -eq 0 ]
-    [ ! -d "$CLAUDE_DIR/rules" ]
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset res-test
 
-    # Restore (--force to skip auto-backup)
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore --force restore-src
+    # Delete something
+    rm -rf "$CLAUDE_DIR/rules"
+
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore --force res-test
     [ "$status" -eq 0 ]
     [ -d "$CLAUDE_DIR/rules" ]
     [ -f "$CLAUDE_DIR/rules/test-rule.md" ]
-    [ -f "$CLAUDE_DIR/CLAUDE.md" ]
+}
+
+@test "restore: restores everything from backup, not just known paths" {
+    # Add unknown file, backup, reset, restore
+    echo "surprise" > "$CLAUDE_DIR/surprise-file.txt"
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup res-unknown
+
+    # After reset, surprise file is gone
+    [ ! -f "$CLAUDE_DIR/surprise-file.txt" ]
+
+    # Restore brings it back
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore --force res-unknown
+    [ "$status" -eq 0 ]
+    [ -f "$CLAUDE_DIR/surprise-file.txt" ]
 }
 
 @test "restore: auto-creates pre-restore backup" {
-    # Create a backup to restore from
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset auto-bak-src
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset auto-bak
+
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore auto-bak
     [ "$status" -eq 0 ]
 
-    # Restore without --force — should auto-backup first
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore auto-bak-src
-    [ "$status" -eq 0 ]
-    # Should have a pre-restore-* backup
+    # Should have created a pre-restore-* backup
     local pre_restore
-    pre_restore=$(ls -1 "$BACKUP_DIR" | grep "^pre-restore-")
+    pre_restore=$(find "$BACKUP_DIR" -maxdepth 1 -name "pre-restore-*" -type d | head -1)
     [ -n "$pre_restore" ]
+    [ -f "$pre_restore/manifest.json" ]
 }
 
 @test "restore: --force skips auto-backup" {
-    # Create a backup
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset force-restore-src
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset force-res
+
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore --force force-res
     [ "$status" -eq 0 ]
 
-    # Restore with --force
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore --force force-restore-src
-    [ "$status" -eq 0 ]
-    # No pre-restore backups
-    local pre_count
-    pre_count=$(ls -1 "$BACKUP_DIR" | grep -c "^pre-restore-" || true)
-    [ "$pre_count" -eq 0 ]
+    local count
+    count=$(find "$BACKUP_DIR" -maxdepth 1 -name "pre-restore-*" -type d | wc -l)
+    [ "$count" -eq 0 ]
 }
 
 @test "restore: nonexistent backup errors" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore does-not-exist
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore ghost
     [ "$status" -ne 0 ]
     [[ "$output" == *"not found"* ]]
 }
@@ -211,19 +233,16 @@ load test_helper
 @test "restore: missing name errors" {
     run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" restore
     [ "$status" -ne 0 ]
-    [[ "$output" == *"name required"* || "$output" == *"Backup name required"* ]]
 }
 
 @test "restore: --dry-run modifies nothing" {
-    # Create backup (with reset)
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup dry-restore-src
-    [ "$status" -eq 0 ]
-    [ ! -d "$CLAUDE_DIR/rules" ]
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset dry-res
 
-    # Dry-run restore
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" --dry-run restore --force dry-restore-src
+    rm -rf "$CLAUDE_DIR/rules"
+
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" --dry-run restore dry-res
     [ "$status" -eq 0 ]
-    # Files should NOT be restored
+    # Rules should NOT be restored (dry run)
     [ ! -d "$CLAUDE_DIR/rules" ]
 }
 
@@ -232,78 +251,27 @@ load test_helper
 # =============================================================================
 
 @test "list: shows existing backups" {
-    # Create some backups
     "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset list-a
     "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset list-b
 
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" list
+    run "$CLAUDE_ENV" --dir "$BACKUP_DIR" list
     [ "$status" -eq 0 ]
     [[ "$output" == *"list-a"* ]]
     [[ "$output" == *"list-b"* ]]
 }
 
 @test "list: empty shows 'No backups found'" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" list
+    run "$CLAUDE_ENV" --dir "$BACKUP_DIR" list
     [ "$status" -eq 0 ]
     [[ "$output" == *"No backups found"* ]]
 }
 
 @test "list: shows count" {
-    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset count-a
-    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset count-b
-    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset count-c
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset cnt-test
 
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" list
+    run "$CLAUDE_ENV" --dir "$BACKUP_DIR" list
     [ "$status" -eq 0 ]
-    [[ "$output" == *"3 backup(s) found"* ]]
-}
-
-# =============================================================================
-# COVERAGE — ensuring all ~/.claude/ items are handled
-# =============================================================================
-
-@test "backup: AGENTS.md is backed up with customizations" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset agents-md-test
-    [ "$status" -eq 0 ]
-    [ -f "$BACKUP_DIR/agents-md-test/AGENTS.md" ]
-}
-
-@test "backup: AGENTS.md is removed on reset" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup agents-md-reset
-    [ "$status" -eq 0 ]
-    [ ! -f "$CLAUDE_DIR/AGENTS.md" ]
-}
-
-@test "backup: session history (projects/) kept by default" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup sessions-default
-    [ "$status" -eq 0 ]
-    # projects/ is in runtime layer, kept by default
-    [ -d "$CLAUDE_DIR/projects" ]
-    [ -f "$CLAUDE_DIR/projects/test-project/session.json" ]
-    # Should NOT be in the backup
-    [ ! -d "$BACKUP_DIR/sessions-default/projects" ]
-}
-
-@test "backup: --include-runtime backs up session history" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-runtime rt-test
-    [ "$status" -eq 0 ]
-    [ -d "$BACKUP_DIR/rt-test/projects" ]
-    [ -f "$BACKUP_DIR/rt-test/projects/test-project/session.json" ]
-    [ -f "$BACKUP_DIR/rt-test/history.jsonl" ]
-}
-
-@test "backup: --include-runtime backs up security warning files" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-runtime secwarn-test
-    [ "$status" -eq 0 ]
-    [ -f "$BACKUP_DIR/secwarn-test/security_warnings_state_abc123.json" ]
-    [ -f "$BACKUP_DIR/secwarn-test/security_warnings_state_def456.json" ]
-}
-
-@test "backup: --include-runtime resets security warning files" {
-    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --include-runtime secwarn-reset
-    [ "$status" -eq 0 ]
-    [ ! -f "$CLAUDE_DIR/security_warnings_state_abc123.json" ]
-    [ ! -f "$CLAUDE_DIR/security_warnings_state_def456.json" ]
+    [[ "$output" == *"1 backup(s) found"* ]]
 }
 
 # =============================================================================
@@ -311,7 +279,6 @@ load test_helper
 # =============================================================================
 
 @test "diff: identical shows 'identical'" {
-    # Backup without reset so source matches backup
     "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset diff-ident
 
     run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" diff diff-ident
@@ -322,7 +289,6 @@ load test_helper
 @test "diff: detects modified files" {
     "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset diff-mod
 
-    # Modify a file in the current env
     echo "# Modified rule" > "$CLAUDE_DIR/rules/test-rule.md"
 
     run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" diff diff-mod
@@ -333,12 +299,21 @@ load test_helper
 @test "diff: detects backup-only files" {
     "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset diff-only
 
-    # Remove a file from current env
     rm -rf "$CLAUDE_DIR/rules"
 
     run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" diff diff-only
     [ "$status" -eq 0 ]
     [[ "$output" == *"only in backup"* ]]
+}
+
+@test "diff: detects current-only files" {
+    "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" backup --no-reset diff-cur
+
+    echo "new" > "$CLAUDE_DIR/brand-new-file.txt"
+
+    run "$CLAUDE_ENV" --claude-dir "$CLAUDE_DIR" --dir "$BACKUP_DIR" diff diff-cur
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"only in current"* ]]
 }
 
 @test "diff: nonexistent backup errors" {

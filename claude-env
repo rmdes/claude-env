@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 # --- Default variables ---
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
@@ -45,101 +45,34 @@ debug() {
     fi
 }
 
-# --- Layer definitions (paths relative to CLAUDE_DIR) ---
-LAYER_CUSTOMIZATIONS=(
-    "rules"
-    "skills"
-    "commands"
-    "agents"
-    "hooks"
-    "CLAUDE.md"
-    "AGENTS.md"
-)
+# =============================================================================
+# EXCLUDE-BASED MODEL
+#
+# Instead of listing what to backup (fragile, misses new files), we backup
+# EVERYTHING in $CLAUDE_DIR and only EXCLUDE specific items.
+#
+# Exclude sets control what is SKIPPED during backup+reset.
+# By default: credentials and mcp are excluded (kept in place).
+# Flags let you narrow or widen what gets excluded.
+# =============================================================================
 
-LAYER_CONFIG=(
-    "settings.json"
-    "settings.local.json"
-    "settings.json.bak"
-    "statusline.sh"
-    "statusline-command.sh"
-    ".sisyphus-config.json"
-    ".sisyphus-version.json"
-    ".pilot-manifest.json"
-    ".pilot-claude-baseline.json"
-    ".pilot-settings-baseline.json"
-)
-
-LAYER_PLUGINS=(
-    "plugins"
-)
-
-LAYER_RUNTIME=(
-    "cache"
-    "projects"
-    "sessions"
-    "todos"
-    "tasks"
-    "debug"
-    "file-history"
-    "shell-snapshots"
-    "session-env"
-    "paste-cache"
-    "backups"
-    "telemetry"
-    "statsig"
-    "ide"
-    "plans"
-    "history.jsonl"
-    "stats-cache.json"
-    "mcp-needs-auth-cache.json"
-    "security_warnings_state_*.json"
-)
-
-LAYER_CREDENTIALS=(
+# Items to exclude from backup by default (kept in place, never touched)
+EXCLUDE_CREDENTIALS=(
     ".credentials.json"
 )
 
-LAYER_MCP=(
+EXCLUDE_MCP=(
     "mcp-servers"
     ".mcp.json"
 )
 
-# All layer names
-ALL_LAYERS=(customizations config plugins runtime credentials mcp)
-
-# Default behavior
-DEFAULT_BACKUP_LAYERS=(customizations config plugins)
-DEFAULT_KEEP_LAYERS=(credentials mcp runtime)
-
-# --- Layer flag variables ---
+# --- Exclude flag variables ---
 INCLUDE_MCP=false
 INCLUDE_CREDENTIALS=false
-INCLUDE_RUNTIME=false
-KEEP_CONFIG=false
-KEEP_PLUGINS=false
 NO_RESET=false
-ONLY_LAYERS=""
+EXCLUDE_EXTRA=()  # additional paths to exclude via --exclude
 
-# --- Layer helper functions ---
-get_layer_paths() {
-    local layer="$1"
-    local -n arr="LAYER_${layer^^}"
-    [[ ${#arr[@]} -eq 0 ]] && return 0
-    local entry
-    for entry in "${arr[@]}"; do
-        if [[ "$entry" == *'*'* ]]; then
-            # Glob pattern: expand against CLAUDE_DIR, output relative paths
-            local expanded
-            for expanded in "$CLAUDE_DIR"/$entry; do
-                [[ -e "$expanded" ]] && basename "$expanded"
-            done
-        else
-            printf '%s\n' "$entry"
-        fi
-    done
-}
-
-# Check if an element is in an array
+# --- Helper functions ---
 _array_contains() {
     local needle="$1"; shift
     local item
@@ -149,100 +82,53 @@ _array_contains() {
     return 1
 }
 
-# Remove an element from an array (prints remaining elements)
-_array_remove() {
-    local needle="$1"; shift
+# Build the final exclude list based on flags
+_build_excludes() {
+    local -a excludes=()
+
+    # Always exclude the manifest itself (it's a backup artifact)
+    excludes+=("manifest.json")
+
+    # Credentials excluded unless --include-credentials
+    if [[ "$INCLUDE_CREDENTIALS" != true ]]; then
+        excludes+=("${EXCLUDE_CREDENTIALS[@]}")
+    fi
+
+    # MCP excluded unless --include-mcp
+    if [[ "$INCLUDE_MCP" != true ]]; then
+        excludes+=("${EXCLUDE_MCP[@]}")
+    fi
+
+    # Any --exclude paths
+    if [[ ${#EXCLUDE_EXTRA[@]} -gt 0 ]]; then
+        excludes+=("${EXCLUDE_EXTRA[@]}")
+    fi
+
+    printf '%s\n' "${excludes[@]}"
+}
+
+# List all top-level items in CLAUDE_DIR (files and directories)
+_list_claude_items() {
     local item
-    for item in "$@"; do
-        [[ "$item" != "$needle" ]] && printf '%s\n' "$item"
+    for item in "$CLAUDE_DIR"/* "$CLAUDE_DIR"/.*; do
+        [[ -e "$item" ]] || continue
+        local name
+        name="$(basename "$item")"
+        # Skip . and ..
+        [[ "$name" == "." || "$name" == ".." ]] && continue
+        printf '%s\n' "$name"
     done
 }
 
-resolve_layers() {
-    local -a backup=("${DEFAULT_BACKUP_LAYERS[@]}")
-    local -a keep=("${DEFAULT_KEEP_LAYERS[@]}")
-
-    # --only overrides defaults entirely
-    if [[ -n "$ONLY_LAYERS" ]]; then
-        local -a only_arr=()
-        IFS=',' read -ra only_arr <<< "$ONLY_LAYERS"
-        backup=("${only_arr[@]}")
-        keep=()
-        local layer
-        for layer in "${ALL_LAYERS[@]}"; do
-            if ! _array_contains "$layer" "${backup[@]}"; then
-                keep+=("$layer")
-            fi
-        done
-    fi
-
-    # --include-mcp: move mcp from keep to backup
-    if [[ "$INCLUDE_MCP" == true ]]; then
-        if _array_contains "mcp" "${keep[@]}"; then
-            mapfile -t keep < <(_array_remove "mcp" "${keep[@]}")
-            backup+=("mcp")
-        fi
-    fi
-
-    # --include-credentials: move credentials from keep to backup
-    if [[ "$INCLUDE_CREDENTIALS" == true ]]; then
-        if _array_contains "credentials" "${keep[@]}"; then
-            mapfile -t keep < <(_array_remove "credentials" "${keep[@]}")
-            backup+=("credentials")
-        fi
-    fi
-
-    # --include-runtime: move runtime from keep to backup (true reset)
-    if [[ "$INCLUDE_RUNTIME" == true ]]; then
-        if _array_contains "runtime" "${keep[@]}"; then
-            mapfile -t keep < <(_array_remove "runtime" "${keep[@]}")
-            backup+=("runtime")
-        fi
-    fi
-
-    # --keep-config: move config from backup to keep
-    if [[ "$KEEP_CONFIG" == true ]]; then
-        if _array_contains "config" "${backup[@]}"; then
-            mapfile -t backup < <(_array_remove "config" "${backup[@]}")
-            keep+=("config")
-        fi
-    fi
-
-    # --keep-plugins: move plugins from backup to keep
-    if [[ "$KEEP_PLUGINS" == true ]]; then
-        if _array_contains "plugins" "${backup[@]}"; then
-            mapfile -t backup < <(_array_remove "plugins" "${backup[@]}")
-            keep+=("plugins")
-        fi
-    fi
-
-    RESOLVED_BACKUP=("${backup[@]}")
-    RESOLVED_KEEP=("${keep[@]}")
-}
-
-# --- debug-layers command ---
-cmd_debug_layers() {
-    # Parse layer-related flags
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --include-mcp)       INCLUDE_MCP=true; shift ;;
-            --include-credentials) INCLUDE_CREDENTIALS=true; shift ;;
-            --include-runtime)   INCLUDE_RUNTIME=true; shift ;;
-            --keep-config)       KEEP_CONFIG=true; shift ;;
-            --keep-plugins)      KEEP_PLUGINS=true; shift ;;
-            --no-reset)          NO_RESET=true; shift ;;
-            --only)
-                [[ $# -lt 2 ]] && die "--only requires a value"
-                ONLY_LAYERS="$2"; shift 2
-                ;;
-            *) die "Unknown flag: $1" ;;
-        esac
+# Check if an item matches any exclude pattern
+_is_excluded() {
+    local item="$1"
+    shift
+    local pattern
+    for pattern in "$@"; do
+        [[ "$item" == "$pattern" ]] && return 0
     done
-
-    resolve_layers
-
-    echo "Backup layers: ${RESOLVED_BACKUP[*]}"
-    echo "Keep layers:   ${RESOLVED_KEEP[*]}"
+    return 1
 }
 
 # --- Usage ---
@@ -271,28 +157,27 @@ GLOBAL FLAGS
 
 BACKUP FLAGS
     --no-reset          Skip resetting the environment after backup
-    --include-mcp       Include MCP server configurations
+    --include-mcp       Also backup MCP server configurations (excluded by default)
     --include-credentials
-                        Include credential files in the backup
-    --include-runtime   Include runtime state (caches, sessions, history) for a true full reset
-    --keep-config       Preserve configuration files during reset
-    --keep-plugins      Preserve plugins during reset
-    --only <layers>     Only backup specific layers (comma-separated)
+                        Also backup credential files (excluded by default)
+    --exclude <path>    Exclude additional path(s) from backup (can be repeated)
+    --force             Overwrite existing backup with same name
 
 RESTORE FLAGS
-    --force             Overwrite current environment without confirmation
+    --force             Skip auto-backup of current state before restoring
 
 EXAMPLES
-    claude-env backup                   # Backup with auto-generated name
-    claude-env backup my-setup          # Backup with custom name
-    claude-env restore my-setup         # Restore a snapshot
-    claude-env list                     # List all snapshots
-    claude-env diff my-setup            # Compare current env with snapshot
+    claude-env backup                      # Backup everything (auto-named)
+    claude-env backup my-setup             # Backup with custom name
+    claude-env backup --no-reset snapshot  # Backup without resetting
+    claude-env backup --include-mcp full   # Include MCP configs too
+    claude-env restore my-setup            # Restore a snapshot
+    claude-env list                        # List all snapshots
+    claude-env diff my-setup               # Compare current env with snapshot
 EOF
 }
 
 # --- JSON helper ---
-# Build a JSON array from bash arguments (no jq dependency)
 _json_array() {
     local first=true
     printf '['
@@ -318,18 +203,14 @@ cmd_backup() {
             --force)                 FORCE=true; shift ;;
             --include-mcp)           INCLUDE_MCP=true; shift ;;
             --include-credentials)   INCLUDE_CREDENTIALS=true; shift ;;
-            --include-runtime)       INCLUDE_RUNTIME=true; shift ;;
-            --keep-config)           KEEP_CONFIG=true; shift ;;
-            --keep-plugins)          KEEP_PLUGINS=true; shift ;;
-            --only)
-                [[ $# -lt 2 ]] && die "--only requires a value"
-                ONLY_LAYERS="$2"; shift 2
+            --exclude)
+                [[ $# -lt 2 ]] && die "--exclude requires a value"
+                EXCLUDE_EXTRA+=("$2"); shift 2
                 ;;
             -*)
                 die "Unknown flag: $1"
                 ;;
             *)
-                # First positional arg = backup name
                 if [[ -z "$name" ]]; then
                     name="$1"
                 else
@@ -340,122 +221,109 @@ cmd_backup() {
         esac
     done
 
-    # Determine backup name: positional arg or timestamp fallback
+    # Determine backup name
     if [[ -z "$name" ]]; then
         name="$(date -u +%Y-%m-%dT%H-%M-%S)"
     fi
 
-    # Validate: CLAUDE_DIR exists
+    # Validate
     [[ -d "$CLAUDE_DIR" ]] || die "Claude directory does not exist: $CLAUDE_DIR"
 
-    # Validate: backup path doesn't already exist
     local backup_path="$BACKUP_DIR/$name"
     if [[ -d "$backup_path" ]] && [[ "$FORCE" != true ]]; then
         die "Backup '$name' already exists at $backup_path. Use a different name or --force."
     fi
 
-    # Resolve which layers to backup/keep
-    resolve_layers
+    # Build exclude list
+    local -a excludes=()
+    mapfile -t excludes < <(_build_excludes)
 
-    debug "Backup layers: ${RESOLVED_BACKUP[*]}"
-    debug "Keep layers: ${RESOLVED_KEEP[*]}"
+    debug "Excludes: ${excludes[*]}"
 
-    # --- Copy phase ---
-    local -a copied_layers=()
+    # --- Copy phase: everything except excludes ---
     local -a copied_paths=()
+    local -a excluded_paths=()
 
-    for layer in "${RESOLVED_BACKUP[@]}"; do
-        local layer_copied=false
-        while IFS= read -r path; do
-            # Skip empty paths (from layers with no entries)
-            [[ -z "$path" ]] && continue
-            local src="$CLAUDE_DIR/$path"
-            if [[ -e "$src" ]]; then
-                local dest="$backup_path/$path"
-                if [[ "$DRY_RUN" == true ]]; then
-                    info "[dry-run] Would copy: $path"
-                else
-                    # Create parent directory for the destination
-                    mkdir -p "$(dirname "$dest")"
-                    cp -a "$src" "$dest"
-                    debug "Copied: $path"
-                fi
-                copied_paths+=("$path")
-                layer_copied=true
-            else
-                debug "Skipped (not found): $path"
-            fi
-        done < <(get_layer_paths "$layer")
+    while IFS= read -r item; do
+        [[ -z "$item" ]] && continue
 
-        if [[ "$layer_copied" == true ]]; then
-            copied_layers+=("$layer")
+        if _is_excluded "$item" "${excludes[@]}"; then
+            excluded_paths+=("$item")
+            debug "Excluded: $item"
+            continue
         fi
-    done
+
+        local src="$CLAUDE_DIR/$item"
+        local dest="$backup_path/$item"
+
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[dry-run] Would copy: $item"
+        else
+            mkdir -p "$(dirname "$dest")"
+            cp -a "$src" "$dest"
+            debug "Copied: $item"
+        fi
+        copied_paths+=("$item")
+    done < <(_list_claude_items)
 
     # --- Write manifest.json ---
     local created
     created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    local backup_json
-    backup_json="$(_json_array "${copied_layers[@]}")"
-    local kept_json
-    kept_json="$(_json_array "${RESOLVED_KEEP[@]}")"
+    local copied_json
+    copied_json="$(_json_array "${copied_paths[@]}")"
+    local excluded_json
+    excluded_json="$(_json_array "${excluded_paths[@]}")"
 
     local manifest
-    manifest=$(printf '{\n  "version": 1,\n  "created": "%s",\n  "name": "%s",\n  "layers": %s,\n  "kept": %s,\n  "claude_dir": "%s"\n}' \
-        "$created" "$name" "$backup_json" "$kept_json" "$CLAUDE_DIR")
+    manifest=$(printf '{\n  "version": 2,\n  "created": "%s",\n  "name": "%s",\n  "backed_up": %s,\n  "excluded": %s,\n  "claude_dir": "%s"\n}' \
+        "$created" "$name" "$copied_json" "$excluded_json" "$CLAUDE_DIR")
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[dry-run] Would write manifest.json:"
-        printf '%s\n' "$manifest"
+        info "[dry-run] Would write manifest.json"
     else
         mkdir -p "$backup_path"
         printf '%s\n' "$manifest" > "$backup_path/manifest.json"
     fi
 
-    # --- Reset phase ---
+    # --- Reset phase: remove everything that was backed up ---
     local -a reset_paths=()
 
     if [[ "$NO_RESET" == true ]]; then
         debug "Skipping reset phase (--no-reset)"
     else
-        for layer in "${RESOLVED_BACKUP[@]}"; do
-            while IFS= read -r path; do
-                [[ -z "$path" ]] && continue
-                local target="$CLAUDE_DIR/$path"
-                if [[ -e "$target" ]]; then
-                    if [[ "$DRY_RUN" == true ]]; then
-                        info "[dry-run] Would remove: $path"
-                    else
-                        rm -rf "$target"
-                        debug "Removed: $path"
-                    fi
-                    reset_paths+=("$path")
+        for item in "${copied_paths[@]}"; do
+            local target="$CLAUDE_DIR/$item"
+            if [[ -e "$target" ]]; then
+                if [[ "$DRY_RUN" == true ]]; then
+                    info "[dry-run] Would remove: $item"
+                else
+                    rm -rf "$target"
+                    debug "Removed: $item"
                 fi
-            done < <(get_layer_paths "$layer")
+                reset_paths+=("$item")
+            fi
         done
     fi
 
     # --- Summary ---
     if [[ "$DRY_RUN" == true ]]; then
-        info "[dry-run] Backup '$name' would include layers: ${copied_layers[*]:-none}"
-        info "[dry-run] Kept layers (not backed up): ${RESOLVED_KEEP[*]:-none}"
+        info "[dry-run] Backup '$name' would include ${#copied_paths[@]} item(s)"
+        info "[dry-run] Excluded: ${excluded_paths[*]:-none}"
         if [[ "$NO_RESET" == true ]]; then
             info "[dry-run] Reset: skipped (--no-reset)"
-        elif [[ ${#reset_paths[@]} -gt 0 ]]; then
-            info "[dry-run] Would reset ${#reset_paths[@]} path(s)"
         else
-            info "[dry-run] Nothing to reset"
+            info "[dry-run] Would reset ${#reset_paths[@]} item(s)"
         fi
     else
         local size
         size="$(du -sh "$backup_path" 2>/dev/null | cut -f1)"
         info "Backup created: $backup_path"
-        info "Layers backed up: ${copied_layers[*]:-none}"
-        info "Layers kept (not backed up): ${RESOLVED_KEEP[*]:-none}"
+        info "Backed up ${#copied_paths[@]} item(s), excluded ${#excluded_paths[@]} item(s)"
+        info "Excluded: ${excluded_paths[*]:-none}"
         if [[ "$NO_RESET" == true ]]; then
             info "Reset: skipped (--no-reset)"
         elif [[ ${#reset_paths[@]} -gt 0 ]]; then
-            info "Reset ${#reset_paths[@]} path(s) from CLAUDE_DIR"
+            info "Reset ${#reset_paths[@]} item(s) from CLAUDE_DIR"
         else
             info "Nothing to reset"
         fi
@@ -463,10 +331,10 @@ cmd_backup() {
     fi
 }
 
+# --- restore command ---
 cmd_restore() {
     local name=""
 
-    # Parse restore-specific flags
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --force)
@@ -484,33 +352,22 @@ cmd_restore() {
         esac
     done
 
-    # Require backup name
     [[ -n "$name" ]] || die "Backup name required. Usage: claude-env restore <name>"
 
-    # Validate backup exists
     local backup_path="$BACKUP_DIR/$name"
     [[ -d "$backup_path" ]] || die "Backup '$name' not found at $backup_path"
     [[ -f "$backup_path/manifest.json" ]] || die "Invalid backup: manifest.json not found in $backup_path"
 
-    # Read manifest to get layers list
-    local layers_str
-    layers_str=$(grep '"layers"' "$backup_path/manifest.json" | sed 's/.*\[//;s/\].*//;s/"//g')
-    local -a restore_layers
-    IFS=',' read -ra restore_layers <<< "$layers_str"
-
-    debug "Restore layers from manifest: ${restore_layers[*]}"
-
     # --- Dry-run mode ---
     if [[ "$DRY_RUN" == true ]]; then
         info "[dry-run] Would restore backup '$name' from $backup_path"
-        info "[dry-run] Layers: ${restore_layers[*]}"
-        for layer in "${restore_layers[@]}"; do
-            while IFS= read -r path; do
-                [[ -z "$path" ]] && continue
-                if [[ -e "$backup_path/$path" ]]; then
-                    info "[dry-run] Would restore: $path"
-                fi
-            done < <(get_layer_paths "$layer")
+        local item
+        for item in "$backup_path"/* "$backup_path"/.*; do
+            [[ -e "$item" ]] || continue
+            local bname
+            bname="$(basename "$item")"
+            [[ "$bname" == "." || "$bname" == ".." || "$bname" == "manifest.json" ]] && continue
+            info "[dry-run] Would restore: $bname"
         done
         return 0
     fi
@@ -520,59 +377,45 @@ cmd_restore() {
         local auto_name="pre-restore-$(date -u +%Y-%m-%dT%H-%M-%S)"
         info "Auto-backing up current state as '$auto_name'..."
 
-        # Reset layer flags so the auto-backup uses defaults
+        # Reset flags for auto-backup
         INCLUDE_MCP=false
         INCLUDE_CREDENTIALS=false
-        INCLUDE_RUNTIME=false
-        KEEP_CONFIG=false
-        KEEP_PLUGINS=false
-        NO_RESET=true  # Don't reset during auto-backup
-        ONLY_LAYERS=""
+        NO_RESET=true
+        EXCLUDE_EXTRA=()
         FORCE=false
 
         cmd_backup "$auto_name" --no-reset
     fi
 
-    # --- Restore phase ---
+    # --- Restore phase: copy everything from backup except manifest ---
     local -a restored_paths=()
-    local -a restored_layers=()
 
-    for layer in "${restore_layers[@]}"; do
-        local layer_restored=false
-        while IFS= read -r path; do
-            [[ -z "$path" ]] && continue
-            local src="$backup_path/$path"
-            if [[ -e "$src" ]]; then
-                local dest="$CLAUDE_DIR/$path"
-                mkdir -p "$(dirname "$dest")"
-                cp -a "$src" "$dest"
-                debug "Restored: $path"
-                restored_paths+=("$path")
-                layer_restored=true
-            else
-                debug "Skipped (not in backup): $path"
-            fi
-        done < <(get_layer_paths "$layer")
+    local item
+    for item in "$backup_path"/* "$backup_path"/.*; do
+        [[ -e "$item" ]] || continue
+        local bname
+        bname="$(basename "$item")"
+        [[ "$bname" == "." || "$bname" == ".." || "$bname" == "manifest.json" ]] && continue
 
-        if [[ "$layer_restored" == true ]]; then
-            restored_layers+=("$layer")
-        fi
+        local dest="$CLAUDE_DIR/$bname"
+        mkdir -p "$(dirname "$dest")"
+        cp -a "$item" "$dest"
+        debug "Restored: $bname"
+        restored_paths+=("$bname")
     done
 
     # --- Summary ---
     info "Restored backup '$name' from $backup_path"
-    info "Layers restored: ${restored_layers[*]:-none}"
-    info "Paths restored: ${#restored_paths[@]}"
+    info "Restored ${#restored_paths[@]} item(s)"
 }
 
+# --- list command ---
 cmd_list() {
-    # Check if backup directory exists
     if [[ ! -d "$BACKUP_DIR" ]]; then
         echo "No backups found."
         return 0
     fi
 
-    # Collect backups with manifest.json
     local -a entries=()
     local dir
     for dir in "$BACKUP_DIR"/*/; do
@@ -583,54 +426,54 @@ cmd_list() {
         local name
         name="$(basename "$dir")"
 
-        # Extract created date
         local created
         created=$(grep '"created"' "$manifest" | sed 's/.*"created": *"//;s/".*//')
         local created_display="${created:0:10} ${created:11:5}"
 
-        # Extract layers
-        local layers
-        layers=$(grep '"layers"' "$manifest" | sed 's/.*\[//;s/\].*//;s/"//g;s/ //g')
+        # Count items (works with both v1 and v2 manifests)
+        local item_count
+        if grep -q '"backed_up"' "$manifest"; then
+            # v2: count backed_up array entries
+            item_count=$(grep -o '"[^"]*"' "$manifest" | wc -l)
+        elif grep -q '"layers"' "$manifest"; then
+            # v1: show layer names
+            item_count=$(grep '"layers"' "$manifest" | sed 's/.*\[//;s/\].*//;s/"//g;s/ //g')
+        else
+            item_count="?"
+        fi
 
-        # Get total size
         local size
         size=$(du -sh "$dir" 2>/dev/null | cut -f1)
 
-        # Store as a sortable entry (created timestamp first for sorting)
-        entries+=("${created}|${name}|${created_display}|${layers}|${size}")
+        entries+=("${created}|${name}|${created_display}|${size}")
     done
 
-    # Check if any backups found
     if [[ ${#entries[@]} -eq 0 ]]; then
         echo "No backups found."
         return 0
     fi
 
-    # Sort by created date (newest first)
     local -a sorted=()
     mapfile -t sorted < <(printf '%s\n' "${entries[@]}" | sort -r)
 
-    # Print header
-    printf "%-34s%-22s%-34s%s\n" "Name" "Created" "Layers" "Size"
-    printf '%0.s─' {1..98}
+    printf "%-34s%-22s%s\n" "Name" "Created" "Size"
+    printf '%0.s─' {1..64}
     printf '\n'
 
-    # Print each entry
     local entry
     for entry in "${sorted[@]}"; do
-        local name created_display layers size
-        IFS='|' read -r _ name created_display layers size <<< "$entry"
-        printf "%-34s%-22s%-34s%s\n" "$name" "$created_display" "$layers" "$size"
+        local name created_display size
+        IFS='|' read -r _ name created_display size <<< "$entry"
+        printf "%-34s%-22s%s\n" "$name" "$created_display" "$size"
     done
 
-    # Total count
     printf '\n%d backup(s) found.\n' "${#sorted[@]}"
 }
 
+# --- diff command ---
 cmd_diff() {
     local name=""
 
-    # Parse diff-specific flags
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -*)
@@ -646,100 +489,95 @@ cmd_diff() {
         esac
     done
 
-    # Require backup name
     [[ -n "$name" ]] || die "Backup name required. Usage: claude-env diff <name>"
 
-    # Validate backup exists
     local backup_path="$BACKUP_DIR/$name"
     [[ -d "$backup_path" ]] || die "Backup '$name' not found at $backup_path"
     [[ -f "$backup_path/manifest.json" ]] || die "Invalid backup: manifest.json not found in $backup_path"
 
-    # Read manifest to get layers list
-    local layers_str
-    layers_str=$(grep '"layers"' "$backup_path/manifest.json" | sed 's/.*\[//;s/\].*//;s/"//g')
-    local -a diff_layers
-    IFS=',' read -ra diff_layers <<< "$layers_str"
-
-    # Counters
     local count_identical=0
     local count_modified=0
     local count_backup_only=0
     local count_current_only=0
 
-    for layer in "${diff_layers[@]}"; do
-        local layer_header_printed=false
+    # Collect all items from both backup and current
+    local -a all_items=()
+    local item
 
-        while IFS= read -r path; do
-            [[ -z "$path" ]] && continue
-
-            local backup_src="$backup_path/$path"
-            local current_src="$CLAUDE_DIR/$path"
-            local in_backup=false
-            local in_current=false
-
-            [[ -e "$backup_src" ]] && in_backup=true
-            [[ -e "$current_src" ]] && in_current=true
-
-            # Neither exists — skip silently
-            if [[ "$in_backup" == false ]] && [[ "$in_current" == false ]]; then
-                continue
-            fi
-
-            # Print layer header on first path
-            if [[ "$layer_header_printed" == false ]]; then
-                printf "\nLayer: %s\n" "$layer"
-                layer_header_printed=true
-            fi
-
-            # Determine display name (append / for directories)
-            local display="$path"
-            if [[ -d "$backup_src" ]] || [[ -d "$current_src" ]]; then
-                # Strip trailing slash if present, then add it
-                display="${path%/}/"
-            fi
-
-            if [[ "$in_backup" == true ]] && [[ "$in_current" == true ]]; then
-                # Both exist — compare
-                local diff_output
-                if [[ -d "$backup_src" ]] && [[ -d "$current_src" ]]; then
-                    # Directory comparison
-                    diff_output=$(diff -rq "$backup_src" "$current_src" 2>/dev/null || true)
-                    if [[ -z "$diff_output" ]]; then
-                        printf "  ${GREEN}✓${RESET} %-20s — identical\n" "$display"
-                        (( count_identical++ )) || true
-                    else
-                        local diff_count
-                        diff_count=$(printf '%s\n' "$diff_output" | wc -l)
-                        printf "  ${YELLOW}~${RESET} %-20s — %d file(s) differ\n" "$display" "$diff_count"
-                        (( count_modified++ )) || true
-                    fi
-                elif [[ -f "$backup_src" ]] && [[ -f "$current_src" ]]; then
-                    # File comparison
-                    if diff -q "$backup_src" "$current_src" >/dev/null 2>&1; then
-                        printf "  ${GREEN}✓${RESET} %-20s — identical\n" "$display"
-                        (( count_identical++ )) || true
-                    else
-                        printf "  ${YELLOW}~${RESET} %-20s — modified\n" "$display"
-                        (( count_modified++ )) || true
-                    fi
-                else
-                    # Type mismatch (one is file, other is directory)
-                    printf "  ${YELLOW}~${RESET} %-20s — modified (type changed)\n" "$display"
-                    (( count_modified++ )) || true
-                fi
-            elif [[ "$in_backup" == true ]] && [[ "$in_current" == false ]]; then
-                # Only in backup
-                printf "  ${RED}+${RESET} %-20s — only in backup (missing from current)\n" "$display"
-                (( count_backup_only++ )) || true
-            elif [[ "$in_backup" == false ]] && [[ "$in_current" == true ]]; then
-                # Only in current
-                printf "  ${RED}-${RESET} %-20s — only in current (not in backup)\n" "$display"
-                (( count_current_only++ )) || true
-            fi
-        done < <(get_layer_paths "$layer")
+    # Items in backup (excluding manifest)
+    for item in "$backup_path"/* "$backup_path"/.*; do
+        [[ -e "$item" ]] || continue
+        local bname
+        bname="$(basename "$item")"
+        [[ "$bname" == "." || "$bname" == ".." || "$bname" == "manifest.json" ]] && continue
+        if ! _array_contains "$bname" "${all_items[@]+"${all_items[@]}"}"; then
+            all_items+=("$bname")
+        fi
     done
 
-    # Summary
+    # Items in current
+    for item in "$CLAUDE_DIR"/* "$CLAUDE_DIR"/.*; do
+        [[ -e "$item" ]] || continue
+        local bname
+        bname="$(basename "$item")"
+        [[ "$bname" == "." || "$bname" == ".." ]] && continue
+        if ! _array_contains "$bname" "${all_items[@]+"${all_items[@]}"}"; then
+            all_items+=("$bname")
+        fi
+    done
+
+    # Sort for consistent output
+    local -a sorted_items=()
+    mapfile -t sorted_items < <(printf '%s\n' "${all_items[@]}" | sort)
+
+    for item in "${sorted_items[@]}"; do
+        local backup_src="$backup_path/$item"
+        local current_src="$CLAUDE_DIR/$item"
+        local in_backup=false
+        local in_current=false
+
+        [[ -e "$backup_src" ]] && in_backup=true
+        [[ -e "$current_src" ]] && in_current=true
+
+        local display="$item"
+        if [[ -d "$backup_src" ]] || [[ -d "$current_src" ]]; then
+            display="${item%/}/"
+        fi
+
+        if [[ "$in_backup" == true ]] && [[ "$in_current" == true ]]; then
+            local diff_output
+            if [[ -d "$backup_src" ]] && [[ -d "$current_src" ]]; then
+                diff_output=$(diff -rq "$backup_src" "$current_src" 2>/dev/null || true)
+                if [[ -z "$diff_output" ]]; then
+                    printf "  ${GREEN}✓${RESET} %-40s — identical\n" "$display"
+                    (( count_identical++ )) || true
+                else
+                    local diff_count
+                    diff_count=$(printf '%s\n' "$diff_output" | wc -l)
+                    printf "  ${YELLOW}~${RESET} %-40s — %d file(s) differ\n" "$display" "$diff_count"
+                    (( count_modified++ )) || true
+                fi
+            elif [[ -f "$backup_src" ]] && [[ -f "$current_src" ]]; then
+                if diff -q "$backup_src" "$current_src" >/dev/null 2>&1; then
+                    printf "  ${GREEN}✓${RESET} %-40s — identical\n" "$display"
+                    (( count_identical++ )) || true
+                else
+                    printf "  ${YELLOW}~${RESET} %-40s — modified\n" "$display"
+                    (( count_modified++ )) || true
+                fi
+            else
+                printf "  ${YELLOW}~${RESET} %-40s — modified (type changed)\n" "$display"
+                (( count_modified++ )) || true
+            fi
+        elif [[ "$in_backup" == true ]] && [[ "$in_current" == false ]]; then
+            printf "  ${RED}+${RESET} %-40s — only in backup\n" "$display"
+            (( count_backup_only++ )) || true
+        elif [[ "$in_backup" == false ]] && [[ "$in_current" == true ]]; then
+            printf "  ${RED}-${RESET} %-40s — only in current\n" "$display"
+            (( count_current_only++ )) || true
+        fi
+    done
+
     printf "\nSummary: %d identical, %d modified, %d only in backup, %d only in current\n" \
         "$count_identical" "$count_modified" "$count_backup_only" "$count_current_only"
 }
@@ -784,9 +622,8 @@ case "${1:-}" in
     backup)  shift; cmd_backup "$@" ;;
     restore) shift; cmd_restore "$@" ;;
     list)    shift; cmd_list "$@" ;;
-    diff)         shift; cmd_diff "$@" ;;
-    debug-layers) shift; cmd_debug_layers "$@" ;;
-    help)         usage ;;
+    diff)    shift; cmd_diff "$@" ;;
+    help)    usage ;;
     version) echo "claude-env $VERSION" ;;
     "")      usage ;;
     *)       die "Unknown command: $1. Run 'claude-env help' for usage." ;;
