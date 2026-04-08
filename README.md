@@ -2,15 +2,16 @@
 
 **Safely backup, swap, and restore your entire Claude Code environment.**
 
-Claude Code stores everything under `~/.claude/` — your rules, skills, agents, commands, hooks, plugins, settings, MCP servers, and credentials. It's the accumulated result of weeks or months of customization. There's no built-in way to snapshot it, swap to a clean slate, or roll back.
+Claude Code stores everything under `~/.claude/` — your rules, skills, agents, commands, hooks, plugins (including their full runtime cache), settings, MCP servers, and credentials. It's the accumulated result of weeks or months of customization. There's no built-in way to snapshot it, swap to a clean slate, or roll back.
 
-`claude-env` fixes that. It treats your Claude Code config as a set of **layers** (customizations, config, plugins, credentials, MCP) and lets you back up, reset, restore, and compare them independently.
+`claude-env` fixes that. It treats your Claude Code config as a set of **layers** (customizations, config, plugins, runtime, credentials, MCP) and lets you back up, reset, restore, and compare them independently.
 
 ## The Problem
 
 You want to try a new agentic framework that integrates with Claude Code. Or you want to start fresh with a minimal setup. Or you need different configurations for different projects. But `~/.claude/` is a mix of:
 
 - **Your work** — rules you wrote, skills you installed, agents you configured, settings you tuned
+- **Plugin runtime** — the entire plugin ecosystem including downloaded skills, cached marketplaces, and plugin data (~1GB)
 - **Runtime noise** — session logs, caches, telemetry, debug output, temp files
 
 Deleting `~/.claude/` is a nuclear option. Manually copying files is error-prone. You need to know which files matter and which are disposable.
@@ -20,17 +21,26 @@ Deleting `~/.claude/` is a nuclear option. Manually copying files is error-prone
 ## Quick Start
 
 ```bash
-# Save your current environment
+# Save your current environment (typically ~1GB with plugins)
 claude-env backup my-setup
 
-# Your ~/.claude/ is now clean — only credentials and MCP configs remain
-# Go ahead and test that new framework, install new plugins, etc.
+# Your ~/.claude/ is now clean — only credentials, MCP configs, and
+# regenerable runtime state remain. Claude Code will feel like a fresh install.
 
-# Don't like it? Come back in one command:
+# Don't like the new setup? Come back in one command:
 claude-env restore my-setup
 ```
 
-That's it. Your rules, skills, agents, commands, hooks, plugins, and settings are all back exactly as they were.
+That's it. Your rules, skills, agents, commands, hooks, plugins (with all their cached code), and settings are all back exactly as they were.
+
+### True full reset (first-install experience)
+
+By default, runtime state (sessions, caches, history) is kept since it regenerates automatically. For a complete wipe:
+
+```bash
+# Nuclear option: backup + reset EVERYTHING except credentials and MCP (~2GB)
+claude-env backup my-setup --include-runtime
+```
 
 ## Installation
 
@@ -67,33 +77,34 @@ Make sure `~/.local/bin` is in your `PATH`.
 
 `claude-env` organizes `~/.claude/` into six layers:
 
-| Layer | What's in it | Default behavior |
-|-------|-------------|-----------------|
-| **customizations** | `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `CLAUDE.md` | Backup + reset |
-| **config** | `settings.json`, `settings.local.json`, `statusline.sh`, Sisyphus/Pilot config files | Backup + reset |
-| **plugins** | `plugins/installed_plugins.json`, `plugins/config.json`, `plugins/known_marketplaces.json`, `plugins/local/`, `plugins/data/` | Backup + reset |
-| **integrations** | (reserved for future use) | Backup + reset |
-| **credentials** | `.credentials.json` | **Keep** (never touched unless you opt in) |
-| **mcp** | `mcp-servers/`, `.mcp.json` | **Keep** (never touched unless you opt in) |
+| Layer | What's in it | Default behavior | Typical size |
+|-------|-------------|-----------------|-------------|
+| **customizations** | `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `CLAUDE.md` | Backup + reset | ~1MB |
+| **config** | `settings.json`, `settings.local.json`, `statusline.sh`, Sisyphus/Pilot config files | Backup + reset | ~50KB |
+| **plugins** | The entire `plugins/` directory: registry files, `local/`, `data/`, `cache/` (all downloaded plugin code), `marketplaces/`, `known_marketplaces.json` | Backup + reset | **~1GB** |
+| **runtime** | `cache/`, `projects/`, `sessions/`, `todos/`, `tasks/`, `debug/`, `file-history/`, `shell-snapshots/`, `telemetry/`, `history.jsonl`, and other ephemeral state | **Keep** (opt-in with `--include-runtime`) | ~900MB |
+| **credentials** | `.credentials.json` | **Keep** (opt-in with `--include-credentials`) | ~7KB |
+| **mcp** | `mcp-servers/`, `.mcp.json` | **Keep** (opt-in with `--include-mcp`) | varies |
 
 **"Backup + reset"** means: the files are copied to the backup, then removed from `~/.claude/`. You get a clean slate for that layer.
 
-**"Keep"** means: the files stay in `~/.claude/` and are NOT included in the backup. Your API credentials and MCP server configs survive across environment swaps.
+**"Keep"** means: the files stay in `~/.claude/` and are NOT included in the backup unless you opt in.
 
-### What's NOT backed up (by design)
+#### Why plugins is the biggest layer
 
-These are ephemeral runtime files that regenerate automatically:
+The `plugins/` directory isn't just a few JSON config files. It contains:
 
-- `sessions/` — conversation transcripts
-- `projects/` — per-project permission caches
-- `todos/`, `tasks/` — session-scoped task lists
-- `cache/`, `plugins/cache/`, `plugins/repos/` — download caches
-- `backups/` — Claude Code's own internal backups
-- `debug/`, `telemetry/`, `statsig/` — debug logs and telemetry
-- `history.jsonl` — command history
-- `file-history/`, `session-env/`, `shell-snapshots/`, `paste-cache/` — various caches
-- `security_warnings_state_*.json` — security prompt state
-- `ide/` — IDE integration state
+- `plugins/cache/` — **~650MB** of downloaded plugin source code (superpowers, workflows, skills, LSP servers)
+- `plugins/marketplaces/` — **~340MB** of marketplace indexes
+- `plugins/data/` — plugin-specific persistent state (e.g., episodic memory databases)
+- `plugins/local/` — locally developed plugins
+- Registry files — `installed_plugins.json`, `config.json`, `known_marketplaces.json`
+
+If you don't back up `plugins/`, you're not really resetting Claude Code. The old plugin code stays cached and Claude boots up looking exactly the same.
+
+#### Why runtime is kept by default
+
+The runtime layer contains caches, session logs, and debug output that regenerate automatically. Keeping it means faster Claude startup (no re-caching). Including it with `--include-runtime` gives you a true first-install experience but the backup will be ~2GB.
 
 ### Manifests
 
@@ -105,7 +116,7 @@ Every backup writes a `manifest.json` that records what was backed up:
   "created": "2026-04-06T14:30:00Z",
   "name": "my-setup",
   "layers": ["customizations", "config", "plugins"],
-  "kept": ["credentials", "mcp"],
+  "kept": ["credentials", "mcp", "runtime"],
   "claude_dir": "/home/you/.claude"
 }
 ```
@@ -116,10 +127,10 @@ This manifest is how `restore`, `list`, and `diff` know what layers a backup con
 
 ### `backup [name]`
 
-Creates a snapshot of your Claude Code environment. By default, it backs up the customizations, config, plugins, and integrations layers, then **resets** them (removes them from `~/.claude/`). Credentials and MCP are kept in place.
+Creates a snapshot of your Claude Code environment. By default, it backs up the customizations, config, and plugins layers, then **resets** them (removes them from `~/.claude/`). Credentials, MCP, and runtime are kept in place.
 
 ```bash
-# Backup with a name you'll remember
+# Backup with a name you'll remember (~1GB)
 claude-env backup my-setup
 
 # Auto-generated timestamp name (2026-04-06T14-30-00)
@@ -135,6 +146,9 @@ claude-env backup my-setup --dry-run
 **Layer control flags:**
 
 ```bash
+# True full reset — also backup+reset all runtime state (~2GB)
+claude-env backup my-setup --include-runtime
+
 # Also backup (and reset) your MCP server configs
 claude-env backup my-setup --include-mcp
 
@@ -196,9 +210,9 @@ claude-env list
 ```
 Name                              Created               Layers                            Size
 ──────────────────────────────────────────────────────────────────────────────────────────────────
-my-setup                          2026-04-06 14:30      customizations,config,plugins      2.1M
-pre-restore-2026-04-06T14-45-00   2026-04-06 14:45      customizations,config,plugins      1.8M
-minimal-config                    2026-04-01 09:00      config                             12K
+my-setup                          2026-04-06 14:30      customizations,config,plugins      990M
+pre-restore-2026-04-06T14-45-00   2026-04-06 14:45      customizations,config,plugins      985M
+minimal-config                    2026-04-01 09:00      config                             52K
 
 3 backup(s) found.
 ```
@@ -224,8 +238,7 @@ Layer: config
   ✓ settings.local.json  — identical
 
 Layer: plugins
-  ✓ plugins/installed_plugins.json — identical
-  ~ plugins/data/        — 5 file(s) differ
+  ~ plugins/             — 12 file(s) differ
 
 Summary: 5 identical, 3 modified, 1 only in backup, 0 only in current
 ```
@@ -280,6 +293,15 @@ claude-env restore before-experiment
 
 # 4. Like it? Your old setup is still saved if you ever want it.
 claude-env list
+```
+
+### True clean-room testing
+
+```bash
+# Full reset — first-install experience (credentials + MCP kept)
+claude-env backup before-experiment --include-runtime
+
+# Now ~/.claude/ has ONLY credentials and MCP. Claude Code is truly fresh.
 ```
 
 ### Switching between project-specific configurations
@@ -344,7 +366,7 @@ Backups are stored in `~/.claude-backups/` by default. Each backup is a director
 
 ```
 ~/.claude-backups/
-  my-setup/
+  my-setup/                         # ~990MB typically
     manifest.json
     rules/
     skills/
@@ -354,11 +376,14 @@ Backups are stored in `~/.claude-backups/` by default. Each backup is a director
     CLAUDE.md
     settings.json
     settings.local.json
-    plugins/
+    plugins/                        # The big one
       installed_plugins.json
       config.json
-      local/
-      data/
+      known_marketplaces.json
+      local/                        # Your custom plugins
+      data/                         # Plugin state (episodic memory, etc.)
+      cache/                        # All downloaded plugin code (~650MB)
+      marketplaces/                 # Marketplace indexes (~340MB)
   pre-restore-2026-04-06T14-30-00/
     manifest.json
     ...
@@ -376,9 +401,17 @@ No. `claude-env` only touches the files listed in its layer definitions. It neve
 
 Every `restore` automatically creates a `pre-restore-*` backup first. You can always `claude-env restore pre-restore-2026-04-06T14-30-00` to undo.
 
-**Q: Can I back up only my rules/skills without touching plugins?**
+**Q: Why is the backup ~1GB?**
 
-Yes: `claude-env backup my-rules --only customizations`
+Because it includes the full `plugins/` directory. Claude Code downloads plugin source code into `plugins/cache/` (~650MB) and marketplace indexes into `plugins/marketplaces/` (~340MB). Without these, a "reset" leaves the old plugin runtime in place and Claude boots up looking the same.
+
+**Q: Can I make a lighter backup without plugins?**
+
+Yes: `claude-env backup my-rules --only customizations,config` — this skips plugins and produces a ~1MB backup. But your reset won't feel like a fresh install.
+
+**Q: What's the difference between default and `--include-runtime`?**
+
+Default backup (~1GB) resets your customizations, settings, and plugins. Claude Code starts fresh but retains session history, caches, and project data. With `--include-runtime` (~2GB), ALL ephemeral state is also wiped — true first-install experience.
 
 **Q: Does it work on macOS/Linux?**
 
